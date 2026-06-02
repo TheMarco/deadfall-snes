@@ -1,35 +1,54 @@
-# Deadfall — SNES port
+# Deadfall (SNES)
 
-A faithful SNES cartridge port of **Deadfall** (the full Phaser 3 game in `../cubed`),
-built in C with [PVSnesLib](https://github.com/alekmaul/pvsneslib). Runs on real SNES
-hardware and emulators (tested in OpenEmu).
+A Super Nintendo port of **Deadfall**, my game — play the original at
+**[deadfall.ai-created.com](https://deadfall.ai-created.com)**.
 
-## Status
+This is a faithful, from-scratch reimplementation of the full game as a real SNES
+cartridge image (`deadfall.sfc`) in C using [PVSnesLib](https://github.com/alekmaul/pvsneslib).
+It runs on emulators (tested in OpenEmu) and real hardware.
 
-Playable: movement / push (with the 400 ms push-delay) / mining / animated gravity
-with smooth falling tiles / crush / enemies (BFS) / robot + lightning / section
-transitions with a parallax scrolling background (4-direction slide) / HUD / SFX /
-chiptune music converted from MIDI.
+**This SNES version is fully free and open source.** Once it's finished I'll also
+include the compiled ROM image here so you can just download and play. Until then,
+you can build it yourself with the instructions below.
+
+## Status (work in progress)
+
+Playable already: tile-locked movement, push (with the original's hold-to-push delay),
+mining, animated gravity with smooth falling tiles and crush, BFS enemies, the zapping
+robot, 4-direction section transitions with a parallax scrolling background, HUD, BRR
+sound effects, and chiptune music converted from MIDI. Remaining: full scene/UI polish,
+all 10 levels tuned, and a final fidelity pass.
 
 ## Build
 
-Requires PVSnesLib with `PVSNESLIB_HOME` set.
+You'll need [PVSnesLib](https://github.com/alekmaul/pvsneslib) installed with the
+`PVSNESLIB_HOME` environment variable pointing at it.
 
 ```sh
 make            # builds deadfall.sfc
-make run        # build + deploy into OpenEmu (tools/run_openemu.sh)
+make run        # build, then deploy into OpenEmu (tools/run_openemu.sh)
 make clean
 ```
 
-The generated SNES assets (`res/*.pic/.pal/.map/.it`, `src/levels.c`) are committed so
-the ROM builds without re-running the asset pipeline. To regenerate assets you also need
-the source game at `../cubed` and the tools in `tools/` (see `tools/build_gfx.py`,
-`tools/make_bg.py`, `tools/mid2it.py`, `tools/convert_levels.py`).
+Then load `deadfall.sfc` in any SNES emulator (Mesen-S, bsnes, snes9x, OpenEmu) or
+flash it to a cartridge.
 
-## Layout
+The generated SNES assets (`res/*.pic` / `.pal` / `.map` / `.it`, and `src/levels.c`)
+are committed, so the ROM builds without re-running the asset pipeline. Regenerating
+assets from the original art additionally requires the source game and the Python tools
+in `tools/` (`build_gfx.py`, `make_bg.py`, `mid2it.py`, `convert_levels.py`).
 
-- `src/`, `include/` — C source (game logic + rendering + audio)
-- `hdr.asm`, `data.asm` — LoROM header/vectors + incbin'd assets
-- `res/` — converted graphics / audio
-- `tools/` — Python/asset-conversion pipeline
-- `Makefile`
+## Project layout
+
+| Path | What |
+|------|------|
+| `src/`, `include/` | C source — game logic, rendering, audio |
+| `hdr.asm`, `data.asm` | LoROM header/vectors + incbin'd assets |
+| `res/` | converted graphics & audio |
+| `tools/` | Python asset-conversion pipeline |
+| `Makefile` | build |
+
+## License
+
+The Deadfall game and original assets are © their author (me). This SNES port's
+source code is released as free and open source — see `LICENSE` (to be added).
