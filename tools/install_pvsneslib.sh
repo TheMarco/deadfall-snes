@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # PVSnesLib installer for macOS (Apple Silicon via Rosetta or Intel).
-# Run this with network access:  ! bash /Users/marcovhv/projects/GIT/cubed-snes/tools/install_pvsneslib.sh
+# Run this with network access:  ! bash /Users/marcovhv/projects/GIT/deadfall-snes/tools/install_pvsneslib.sh
 #
 # It downloads the latest PVSnesLib release, extracts it to ~/pvsneslib,
 # detects PVSNESLIB_HOME, persists it to ~/.zshrc, and writes the value to
-# cubed-snes/.pvsneslib_home so the build can pick it up.
+# deadfall-snes/.pvsneslib_home so the build can pick it up.
 set -euo pipefail
 
 DEST="$HOME/pvsneslib"
-PROJ="/Users/marcovhv/projects/GIT/cubed-snes"
+PROJ="/Users/marcovhv/projects/GIT/deadfall-snes"
 TMP="$(mktemp -d)"
 API="https://api.github.com/repos/alekmaul/pvsneslib/releases/latest"
 
