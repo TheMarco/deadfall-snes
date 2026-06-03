@@ -18,21 +18,24 @@ BG = os.path.join(PROJ, "bg")
 
 PARAMS = dict(base_pal=2, npal=6, budget=1024, merge_to=1022)
 
+# Wash every backdrop toward 50% gray so it reads as more 'distant'. 0.0 = off;
+# 0.3 = the gray overlay is 30% opaque (orig 70% / gray 30%). Tune to taste.
+GRAY = 0.35
+
+# Level 1 source = test3.png (repo root); levels 2-10 = bg/bg2..bg10.png.
+SOURCES = {1: os.path.join(PROJ, "test3.png")}
+for _n in range(2, 11):
+    SOURCES[_n] = os.path.join(BG, "bg%d.png" % _n)
+
 
 def main():
-    # Level 1: reuse the existing, approved texture verbatim.
-    for ext in ("pic", "map", "pal"):
-        src = os.path.join(RES, "bgtex." + ext)
-        if os.path.exists(src):
-            shutil.copyfile(src, os.path.join(RES, "bgtex_1." + ext))
-    print("bgtex_1 <- res/bgtex.* (level 1, unchanged)")
-
-    for n in range(2, 11):
-        src = os.path.join(BG, "bg%d.png" % n)
+    print("gray wash = %.0f%%" % (GRAY * 100))
+    for n in range(1, 11):
+        src = SOURCES[n]
         if not os.path.exists(src):
             print("  MISSING %s" % src)
             continue
-        make_bg.convert(src, os.path.join(RES, "bgtex_%d" % n), **PARAMS)
+        make_bg.convert(src, os.path.join(RES, "bgtex_%d" % n), gray=GRAY, **PARAMS)
 
     print("\npic sizes (must be < 32768 = one LoROM bank):")
     ok = True

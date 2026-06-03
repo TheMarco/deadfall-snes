@@ -132,6 +132,25 @@ def apply_tint(img, tint):
     return Image.fromarray(a.astype(np.uint8), "RGBA")
 
 
+def bevel(img, hi=42, lo=56):
+    """Top-left-lit bevel for depth: brighten the top/left-facing edges of the
+    opaque shape and darken the bottom/right-facing edges (light from top-left).
+    Shape-aware -- edges come from the alpha mask, so it follows a gem's facets or
+    a block's square, not just the tile border."""
+    a = np.array(img.convert("RGBA"))
+    rgb = a[:, :, :3].astype(np.int16)
+    op = a[:, :, 3] >= 128
+    p = np.pad(op, 1, constant_values=False)
+    above, left = p[0:16, 1:17], p[1:17, 0:16]
+    below, right = p[2:18, 1:17], p[1:17, 2:18]
+    hi_mask = op & (~above | ~left)        # top/left-facing edge -> highlight
+    lo_mask = op & (~below | ~right) & ~hi_mask   # bottom/right-facing -> shadow
+    rgb[hi_mask] += hi
+    rgb[lo_mask] -= lo
+    a[:, :, :3] = np.clip(rgb, 0, 255).astype(np.uint8)
+    return Image.fromarray(a, "RGBA")
+
+
 def gameplay_tiles(gem_sheet="gem-1.png", iron_col=0, block_tint=None):
     """The 16 gameplay metatiles as 16x16 RGBA images (index 0 = transparent)."""
     block = load("block.png");  gem = load(gem_sheet);  iron = load("iron-sprite.png")
@@ -149,6 +168,8 @@ def gameplay_tiles(gem_sheet="gem-1.png", iron_col=0, block_tint=None):
     tiles[12] = frame(spawn, 0, 0); tiles[13] = frame(spawn, 1, 0)
     tiles[14] = frame(elife, 0, 0)
     tiles[15] = frame(rspawn, 0, 0)
+    for i in (1, 2, 3, 4, 5, 6, 7):     # block, gem, boulder get the depth bevel
+        tiles[i] = bevel(tiles[i])
     return tiles
 
 

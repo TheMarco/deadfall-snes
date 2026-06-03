@@ -30,10 +30,13 @@ def enc_tile(t):
     return bytes(b)
 
 
-def convert(src, out, base_pal=2, npal=6, budget=960, crop=None, scale=1.0, fit=None, merge_to=None):
+def convert(src, out, base_pal=2, npal=6, budget=960, crop=None, scale=1.0, fit=None, merge_to=None, gray=0.0):
     img = Image.open(src).convert("RGB")
     if crop:
         img = img.crop(crop)
+    if gray > 0.0:                            # wash toward 50% gray so the backdrop
+        g = Image.new("RGB", img.size, (128, 128, 128))   # reads as more 'distant':
+        img = Image.blend(img, g, gray)       # result = img*(1-gray) + 128*gray
     if fit:                                # cover-fit the whole composition into
         fw, fh = fit                       # one screen (scale to fill, centre-crop)
         W0, H0 = img.size                  # -> uniform backdrop, all levels equal
