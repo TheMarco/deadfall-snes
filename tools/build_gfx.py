@@ -20,7 +20,7 @@ import os
 import subprocess
 import sys
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageEnhance
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJ = os.path.dirname(HERE)
@@ -132,6 +132,19 @@ def apply_tint(img, tint):
     return Image.fromarray(a.astype(np.uint8), "RGBA")
 
 
+def boost(img, sat=1.65, contrast=1.13):
+    """Make a tile 'pop' more: raise saturation + a touch of contrast (alpha
+    preserved). Used on the gameplay objects so they stand out against the faded,
+    gray-washed background."""
+    a = img.convert("RGBA")
+    alpha = a.getchannel("A")
+    rgb = ImageEnhance.Color(a.convert("RGB")).enhance(sat)
+    rgb = ImageEnhance.Contrast(rgb).enhance(contrast)
+    out = rgb.convert("RGBA")
+    out.putalpha(alpha)
+    return out
+
+
 def bevel(img, hi=42, lo=56):
     """Top-left-lit bevel for depth: brighten the top/left-facing edges of the
     opaque shape and darken the bottom/right-facing edges (light from top-left).
@@ -168,7 +181,9 @@ def gameplay_tiles(gem_sheet="gem-1.png", iron_col=0, block_tint=None):
     tiles[12] = frame(spawn, 0, 0); tiles[13] = frame(spawn, 1, 0)
     tiles[14] = frame(elife, 0, 0)
     tiles[15] = frame(rspawn, 0, 0)
-    for i in (1, 2, 3, 4, 5, 6, 7):     # block, gem, boulder get the depth bevel
+    for i in range(1, 16):              # all game objects pop more vs the faded bg
+        tiles[i] = boost(tiles[i])
+    for i in (1, 2, 3, 4, 5, 6, 7):     # block, gem, boulder also get the depth bevel
         tiles[i] = bevel(tiles[i])
     return tiles
 
@@ -328,10 +343,13 @@ def make_lightning(horizontal):
     return sheet
 
 
-def build_obj(sheet_rgba, base, colors=16):
+def build_obj(sheet_rgba, base, colors=16, do_boost=False):
     """OBJ sprite sheet: pad to 128px (16-tile) width and emit raster 8x8 tiles
     so 16x16 hardware sprites address tiles as N,N+1,N+16,N+17. A 16x16 frame at
-    sheet column/row (fc,fr) lives at base tile = fr*32 + fc*2."""
+    sheet column/row (fc,fr) lives at base tile = fr*32 + fc*2. do_boost raises
+    saturation so the sprite pops like the gameplay tiles."""
+    if do_boost:
+        sheet_rgba = boost(sheet_rgba)
     w, h = sheet_rgba.size
     canvas = Image.new("RGBA", (128, h), (0, 0, 0, 0))
     canvas.paste(sheet_rgba, (0, 0))
@@ -345,17 +363,17 @@ def main():
         build_bg_tiles(lvl)
 
     print(">> player sprite sheet (128-wide OBJ layout)")
-    build_obj(load("player.png"), "spr_player")
+    build_obj(load("player.png"), "spr_player", do_boost=True)
 
     print(">> enemy sprite sheet")
-    build_obj(load("enemy.png"), "spr_enemy")
+    build_obj(load("enemy.png"), "spr_enemy", do_boost=True)
 
     print(">> player + enemy death animations (5 frames each)")
-    build_obj(load("player-death.png"), "spr_pdeath")
-    build_obj(load("enemy-death.png"), "spr_edeath")
+    build_obj(load("player-death.png"), "spr_pdeath", do_boost=True)
+    build_obj(load("enemy-death.png"), "spr_edeath", do_boost=True)
 
     print(">> robot sprite sheet (4 dirs x 3 eye states)")
-    build_obj(load("enemy-robot.png"), "spr_robot")
+    build_obj(load("enemy-robot.png"), "spr_robot", do_boost=True)
 
     print(">> lightning beam (real art, horizontal + vertical, 4 frames x 3 segs)")
     build_obj(make_lightning(horizontal=True),  "spr_zap_h")
@@ -369,7 +387,7 @@ def main():
     falls.paste(frame(load("gem-1.png"), 0, 0), (0, 0))
     falls.paste(frame(load("iron-sprite.png"), 0, 0), (16, 0))
     falls.paste(frame(load("extralife.png"), 0, 0), (32, 0))
-    build_obj(falls, "spr_falls")
+    build_obj(falls, "spr_falls", do_boost=True)
 
     print("done.")
     return 0

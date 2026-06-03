@@ -38,6 +38,14 @@ bg_tiles_10_picend:
 bg_tiles_10_pal: .incbin "res/bg_tiles_10.pal"
 .ends
 
+; ---- Title-screen BG2 image (256x256, the DEADFALL logo). ~15KB pic. ----
+.section ".rodata_title" superfree
+title_pic: .incbin "res/title.pic"
+title_picend:
+title_map: .incbin "res/title.map"
+title_pal: .incbin "res/title.pal"
+.ends
+
 ; ---- HUD glyph font (4bpp 8x8, ASCII 32-95) + palette ----
 .section ".rodata_hudfont" superfree
 hud_font_pic:  .incbin "res/hud_font.pic"

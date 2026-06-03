@@ -70,6 +70,7 @@ void render_set_background(void);  /* load the current section's BG2 (caller for
 void render_bg2_reset(void);       /* reset the per-section BG2 phase (level load / respawn) */
 void render_load_background(void); /* swap BG2 to current section (handles forced blank)     */
 void render_load_gameplay_tiles(u8 level); /* load level's gem/boulder/block tiles+palettes (forced-blank) */
+void render_show_title(void);      /* put the DEADFALL logo image on BG2 (title scene)        */
 void render_build_map(void);        /* full rebuild from the current section (load/transition) */
 void render_slide_begin(u8 dir, u8 adj_row, u8 adj_col); /* stage adjacent section, go 64-wide */
 void render_slide_scroll(u16 cam);  /* shadow BG1+BG2 scroll during a slide (applied in vblank) */

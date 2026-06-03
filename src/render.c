@@ -47,6 +47,7 @@ extern char bgtex_7_pic, bgtex_7_picend, bgtex_7_map, bgtex_7_pal;
 extern char bgtex_8_pic, bgtex_8_picend, bgtex_8_map, bgtex_8_pal;
 extern char bgtex_9_pic, bgtex_9_picend, bgtex_9_map, bgtex_9_pal;
 extern char bgtex_10_pic, bgtex_10_picend, bgtex_10_map, bgtex_10_pal;
+extern char title_pic, title_picend, title_map, title_pal;   /* title-screen BG2 image */
 #define BGTEX_W 32   /* texture width in tiles  */
 #define BGTEX_H 32   /* texture height in tiles (256x256 -> fills the 32-tile map exactly) */
 
@@ -356,6 +357,28 @@ void render_load_background(void) {
     setScreenOn();
 }
 
+/* Title screen: put the DEADFALL logo image on BG2 (no scroll/parallax). BG1 is
+ * left empty (caller cleared it) and BG3 carries "PRESS START". Force-blanked for
+ * the tile DMA; the next level load swaps BG2 back to the playfield background. */
+void render_show_title(void) {
+    u16 *src = (u16 *)&title_map;
+    u16 i;
+    setScreenOff();
+    dmaCopyVram((u8 *)&title_pic, VRAM_BG2_TILES, (u16)(&title_picend - &title_pic));
+    bgSetGfxPtr(1, VRAM_BG2_TILES);
+    setPalette((u8 *)&title_pal, BG2_PAL * 16, 96 * 2);   /* CGRAM 32..127 */
+    bgSetMapPtr(1, VRAM_BG2_MAP, SC_32x32);
+    for (i = 0; i < 32 * 32; i++) bg2map[i] = src[i];     /* 1:1, not tiled */
+    dmaCopyVram((u8 *)bg2map, VRAM_BG2_MAP, 0x800);
+    bg2_cur_x = 0; bg2_cur_y = 0;
+    scr_bg1x = 0; scr_bg1y = 0; scr_bg2x = 0; scr_bg2y = 0; scroll_dirty = 0;
+    bgSetMapPtr(0, VRAM_BG1_MAP, SC_32x32);
+    bgSetScroll(0, 0, 0);
+    bgSetScroll(1, 0, 0);
+    render_flush_map();                                   /* push BG1(empty)+BG3(text) */
+    setScreenOn();
+}
+
 void render_init(void) {
     consoleInit();          /* sets up NMI/vblank, auto-joypad read, etc. */
     setBrightness(0);
@@ -592,7 +615,12 @@ u8 render_hud(void) {
 /* ---- text scenes (title / game over / victory) on BG1 ---- */
 void render_clear_screen(void) {
     u16 i;
-    for (i = 0; i < 32 * 32; i++) { bg1map[i] = 0; bg3map[i] = 0; }
+    /* BG3 clears to the opaque BLACK space tile (tile 0, BG3 text sub-palette,
+     * NO priority bit -> sits BEHIND BG1/BG2). This gives the title screen a
+     * black backing so the title image's transparent (index-0) areas read as
+     * black. During gameplay/other scenes BG2 is opaque, so this stays hidden. */
+    u16 blk = (u16)(BG3_TEXT_PAL << 10);
+    for (i = 0; i < 32 * 32; i++) { bg1map[i] = 0; bg3map[i] = blk; }
 }
 
 void render_text(u8 x, u8 y, const char *s) {

@@ -18,8 +18,8 @@ enum { SC_TITLE, SC_PLAY, SC_GAMEOVER, SC_VICTORY };
 static void scene_title(void) {
     render_hide_sprites();
     render_clear_screen();
-    render_text(12, 11, "DEADFALL");
-    render_text(8,  16, "PRESS  START");
+    render_text(10, 25, "PRESS  START");   /* below the logo (BG3, over the image) */
+    render_show_title();                    /* the real DEADFALL logo image on BG2  */
     game_map_dirty = 1;
 }
 
