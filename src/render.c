@@ -4,6 +4,7 @@
 #include "render.h"
 #include "world.h"
 #include "balance.h"
+#include "game.h"      /* game_map_dirty (set when the minimap/HUD changes) */
 
 /* PVSnesLib shadows of the screen-designation registers. */
 extern u8 videoMode;     /* mirror of REG_TM (main screen) */
@@ -59,6 +60,38 @@ static u16 bg2_cur_x, bg2_cur_y;        /* current section's BG2 scroll (accumul
 static u16 slide_bg2_ox, slide_bg2_oy;  /* BG2 scroll captured at slide start */
 static s16 slide_bg2_dx, slide_bg2_dy;  /* BG2 scroll delta across the slide */
 
+/* Custom HUD life-icon glyph (white heart) as a 2bpp 8x8 SNES tile: row-
+ * interleaved planes, plane0 = the heart shape (index 1 = white), plane1 =
+ * ~plane0 so every other pixel is index 2 (black), matching the opaque font. */
+static const u8 hud_life_tile[16] = {
+    0xD8, 0x27,   /* ##.##... */
+    0xF8, 0x07,   /* #####... */
+    0xF8, 0x07,   /* #####... */
+    0xF8, 0x07,   /* #####... */
+    0x70, 0x8F,   /* .###.... */
+    0x20, 0xDF,   /* ..#..... */
+    0x00, 0xFF,   /* ........ */
+    0x00, 0xFF    /* ........ */
+};
+
+/* ---- HUD minimap (monochrome, top-right of the bar) ----
+ * A world_cols x world_rows grid of section squares on BG3, white-on-black to
+ * match the HUD font: current section = hollow ring ("you are here"); a section
+ * that still holds gems = solid square; the exit section while the alarm is up =
+ * blinking solid; empty / out-of-world = blank. The 2x2 tiles (VRAM 65..68) are
+ * rebuilt on change and DMA'd in vblank (render_flush_map). */
+#define MM_TILE0  (HUD_ICON_LIFE + 1)   /* BG3 tiles 65..68 */
+#define MM_COL    30                     /* bg3map column of the 2-wide minimap */
+#define MM_CELL   4                      /* px pitch per section (3x3 square + 1 gap) */
+/* CGRAM 19 (BG3 sub-pal 4 index3) reclaimed as the minimap grey (#888888 BGR555). */
+static const u8 mm_grey_cgram[2] = { 0x31, 0x46 };
+static u8  mm_tiles[64];                 /* 4 tiles x 16 bytes; built here, DMA'd in vblank */
+static u8  mm_has_gems[MAX_SECTIONS];    /* per-section "gems remain" (round-robin scanned) */
+static u8  mm_scan;                      /* round-robin scan cursor */
+static u16 mm_blink;                     /* exit-blink phase counter */
+static u8  mm_dirty;                     /* tiles changed -> DMA in render_flush_map */
+static u32 mm_sig = 0xFFFFFFFF;          /* last-drawn signature (skip rebuild if same) */
+
 /* 32x32 tilemap buffers (entry = tile number | palette<<10 | flips). */
 static u16 bg1map[32 * 32];
 static u16 bg2map[32 * 32];
@@ -81,13 +114,15 @@ static u8  scroll_dirty;
  * robot-spawn (CGRAM 16-31). The two-palette split lets gems stay vivid red
  * while the blue/gold markers keep their own colors. Kept in sync with
  * tools/build_gfx.py MT_PAL (grouping by hue). */
-static const u16 mt_palbits[16] = {
+static const u16 mt_palbits[NB_METATILES] = {
     0, 0, 0, 0,                    /* empty, block x3            -> pal 0 */
     0, 0, 0,                       /* gem x3                     -> pal 0 */
     0,                             /* boulder                    -> pal 0 */
     1 << 10, 1 << 10, 1 << 10, 1 << 10,   /* portal x4           -> pal 1 */
     1 << 10, 1 << 10,             /* spawn x2                    -> pal 1 */
-    1 << 10, 1 << 10             /* extra-life, robot-spawn      -> pal 1 */
+    1 << 10, 1 << 10,            /* extra-life, robot-spawn      -> pal 1 */
+    0, 0,                          /* block shatter 3,4          -> pal 0 */
+    0, 0                           /* gem shatter   3,4          -> pal 0 */
 };
 
 /* Map a tile type (+ damage) to its BG1 metatile index. */
@@ -120,6 +155,20 @@ void render_set_cell(u8 gx, u8 gy) {
     bg1map[(row + 1) * 32 + col + 1] = (u16)(base + 3) | pb;  /* BR */
 }
 
+/* Draw an explicit metatile (e.g. a shatter frame 16-19) into one grid cell,
+ * regardless of the world tile there -- used by the crush/destruction animation,
+ * which overlays the shatter frames after the world cell is already cleared. */
+void render_crush_cell(u8 gx, u8 gy, u8 mt) {
+    u16 base = (u16)(mt * 4);
+    u16 pb  = mt_palbits[mt];
+    u16 col = (u16)(gx * 2);
+    u16 row = (u16)((PLAYFIELD_OFFSET_Y >> 3) + gy * 2);
+    bg1map[row * 32 + col]           = base | pb;
+    bg1map[row * 32 + col + 1]       = (u16)(base + 1) | pb;
+    bg1map[(row + 1) * 32 + col]     = (u16)(base + 2) | pb;
+    bg1map[(row + 1) * 32 + col + 1] = (u16)(base + 3) | pb;
+}
+
 /* Blank a grid cell's four BG1 entries (the tile is shown as a falling OBJ
  * instead). Does NOT touch the world grid -- render_set_cell redraws it on land. */
 void render_clear_cell(u8 gx, u8 gy) {
@@ -141,6 +190,11 @@ void render_build_map(void) {
 }
 
 void render_flush_map(void) {
+    /* Upload the regenerated minimap glyph tiles (VRAM tiles 65..68) in vblank. */
+    if (mm_dirty) {
+        dmaCopyVram(mm_tiles, (u16)(VRAM_BG3_TILES + MM_TILE0 * 8), 64);
+        mm_dirty = 0;
+    }
     /* Slide staging/commit happen here (in vblank) so the screen never blanks. */
     if (slide_pending == 1) {                 /* stage adjacent section, enlarge map */
         u8 vertical = (slide_dir == DIR_UP || slide_dir == DIR_DOWN);
@@ -311,6 +365,10 @@ void render_load_gameplay_tiles(u8 level) {
     dmaCopyVram(pic, VRAM_BG1_TILES, (u16)(picend - pic));
     setPalette(pal, 0, 16 * 2);            /* pal0 -> CGRAM 0-15  */
     setPalette(pal + 32, 16, 16 * 2);      /* pal1 -> CGRAM 16-31 */
+    /* Reclaim CGRAM 19 (a minor ~90px marker accent) as the minimap's GREY so the
+     * minimap can show white(you)/grey(gems) in the same BG3 sub-palette as the
+     * white/black HUD text. Re-applied here because the pal1 load above set it. */
+    setPalette((u8 *)mm_grey_cgram, 19, 2);
 }
 
 /* Fill the WHOLE BG2 map with the seamless texture tiled. Must cover all 32
@@ -427,6 +485,11 @@ void render_init(void) {
     /* BG3 2bpp sub-palette 4 (CGRAM 16-19): index1 white, index2 black so the
      * (now opaque) HUD font draws white text on a solid black bar. */
     setPalette((u8 *)&hud_font2_pal, BG3_TEXT_PAL * 4, 4 * 2);
+    /* Custom life-icon glyph (BG3 tile 64): a white heart on the opaque-black bar
+     * (= the original's life icon next to the lives count). 2bpp, row-interleaved
+     * (even byte=plane0, odd=plane1); plane1=~plane0 makes the background index2
+     * (black) like the rest of the opaque font. */
+    dmaCopyVram((u8 *)hud_life_tile, (u16)(VRAM_BG3_TILES + HUD_ICON_LIFE * 8), 16);
     bgSetGfxPtr(2, VRAM_BG3_TILES);
     bgSetMapPtr(2, VRAM_BG3_MAP, SC_32x32);
     bgSetScroll(2, 0, 0);
@@ -595,21 +658,127 @@ u8 render_hud(void) {
     ls = game.score; lg = game.gems_collected; lt = game.total_gems;
     ll = game.lives; lv = game.current_level; lp = game.portal_active;
 
-    /* Fill HUD rows 0-1 with the opaque black space tile (tile 0 is solid index2)
-     * at high priority, so the bar is a solid black strip over the texture. */
-    for (i = 0; i < 32; i++) {
+    /* Fill HUD rows 0-1 cols 0..29 with the opaque black space tile (tile 0 =
+     * solid index2) at high priority -> a solid black strip over the texture.
+     * Cols 30-31 are owned by the minimap (render_minimap), so leave them. */
+    for (i = 0; i < MM_COL; i++) {
         u16 blk = (u16)((BG3_TEXT_PAL << 10) | 0x2000);
         bg3map[i] = blk; bg3map[32 + i] = blk;
     }
 
-    hud_puts(0, 0, "SCORE");  hud_putnum(6, 0, game.score, 6);
-    hud_puts(14, 0, "GEM");   hud_putnum(17, 0, game.gems_collected, 2);
-    hud_putc(19, 0, '/');     hud_putnum(20, 0, game.total_gems, 2);
-    hud_puts(24, 0, "LV");    hud_putnum(27, 0, game.current_level, 2);
-
-    hud_puts(0, 1, "LIVES");  hud_putnum(6, 1, game.lives, 1);
-    if (game.portal_active) hud_puts(10, 1, "EXIT OPEN");
+    /* Single line laid out like the original: SCORE:000000 GEM:c/t [heart]:lives.
+     * Drawn on ROW 1 (the lower half of the 16px bar) so the emulator's top
+     * overscan can't clip it (row 0 stays blank black padding). */
+    hud_puts(1, 1, "SCORE:");  hud_putnum(7, 1, game.score, 6);
+    hud_puts(14, 1, "GEM:");   hud_putnum(18, 1, game.gems_collected, 2);
+    hud_putc(20, 1, '/');      hud_putnum(21, 1, game.total_gems, 2);
+    /* life icon (custom heart glyph, tile 64) + ':' + lives count */
+    bg3map[32 + 24] = (u16)(HUD_ICON_LIFE) | (BG3_TEXT_PAL << 10) | 0x2000;
+    hud_putc(25, 1, ':');      hud_putnum(26, 1, game.lives, 1);
     return TRUE;
+}
+
+/* Stamp a 3x3 section square (solid, or a hollow ring) at minimap pixel (sx,sy).
+ * sq[] = every opaque square pixel (-> plane0); wh[] = only the WHITE pixels (the
+ * current/exit square) so plane1 = ~wh distinguishes white(idx1) from grey(idx3).
+ * Each row is a u16, bit (15-x) = pixel x. */
+static void mm_square(u16 *sq, u16 *wh, u8 sx, u8 sy, u8 ring, u8 white) {
+    u8 dx, dy;
+    for (dy = 0; dy < 3; dy++)
+        for (dx = 0; dx < 3; dx++) {
+            u16 bit;
+            if (ring && dx == 1 && dy == 1) continue;   /* hollow centre */
+            bit = (u16)(0x8000 >> (sx + dx));
+            sq[sy + dy] |= bit;
+            if (white) wh[sy + dy] |= bit;
+        }
+}
+
+/* Rebuild the minimap when its state changes; refresh one section's gem flag per
+ * call (round-robin) so the per-section scan stays cheap. Called every frame from
+ * game_update. Sets mm_dirty (consumed by render_flush_map) + game_map_dirty when
+ * the picture actually changed. */
+void render_minimap(void) {
+    u8  nsec = (u8)(game.world_rows * game.world_cols);
+    u8  cur  = world_section_index(game.cur_row, game.cur_col);
+    u8  por  = world_section_index(game.portal_row, game.portal_col);
+    u8  blink_on = (u8)(game.portal_active && ((mm_blink >> 4) & 1));   /* ~16-frame phase */
+    u16 sq[16], wh[16];     /* sq = any square pixel (plane0); wh = white pixels only */
+    u32 sig;
+    u8  r, c, idx, ox, oy, ry, tile, tx, ty;
+
+    mm_blink++;
+
+    /* round-robin: scan one section's grid for any remaining gem (linear, cheap) */
+    if (nsec) {
+        u8 s = (u8)(mm_scan % nsec);
+        u8 *g = &game.sections[s][0][0];
+        u8 has = 0, k;
+        for (k = 0; k < SECTION_TILES; k++) if (g[k] == TILE_GEM) { has = 1; break; }
+        mm_has_gems[s] = has;
+        mm_scan = (u8)(s + 1);
+    }
+
+    /* signature = gem bitmap + current + portal-blink phase; skip if unchanged */
+    sig = 0;
+    for (r = 0; r < game.world_rows; r++)
+        for (c = 0; c < game.world_cols; c++)
+            if (mm_has_gems[world_section_index(r, c)]) sig |= (u32)(1UL << (r * 4 + c));
+    sig = (sig << 8) | ((u32)cur << 2) | ((u32)blink_on << 1) | (game.portal_active ? 1 : 0);
+    if (sig == mm_sig) return;
+    mm_sig = sig;
+
+    /* draw the grid, centred in the 16x16 area (smaller worlds dodge overscan):
+     *   current section = WHITE solid (you are here)
+     *   section with gems left = GREY solid
+     *   cleared in-world section = GREY hollow ring (shows the world layout)
+     *   exit section while the alarm is up = WHITE solid, blinking */
+    for (ry = 0; ry < 16; ry++) { sq[ry] = 0; wh[ry] = 0; }
+    ox = (u8)((16 - game.world_cols * MM_CELL) / 2);
+    oy = (u8)((16 - game.world_rows * MM_CELL) / 2);
+    for (r = 0; r < game.world_rows; r++)
+        for (c = 0; c < game.world_cols; c++) {
+            u8 sx = (u8)(ox + c * MM_CELL), sy = (u8)(oy + r * MM_CELL);
+            idx = world_section_index(r, c);
+            if (game.portal_active && idx == por) {        /* exit: white blink */
+                if (blink_on) mm_square(sq, wh, sx, sy, 0, 1);
+            } else if (idx == cur) {                        /* you are here: white */
+                mm_square(sq, wh, sx, sy, 0, 1);
+            } else if (mm_has_gems[idx]) {                  /* gems remain: grey solid */
+                mm_square(sq, wh, sx, sy, 0, 0);
+            } else {                                         /* cleared: grey ring */
+                mm_square(sq, wh, sx, sy, 1, 0);
+            }
+        }
+
+    /* pack the 16x16 into 4 BG3 tiles (TL,TR,BL,BR): plane0 = square pixels,
+     * plane1 = ~white -> idx1 white, idx3 grey (CGRAM19), idx2 black background. */
+    for (ty = 0; ty < 2; ty++)
+        for (tx = 0; tx < 2; tx++) {
+            tile = (u8)(ty * 2 + tx);
+            for (ry = 0; ry < 8; ry++) {
+                u8 p0 = (u8)((sq[ty * 8 + ry] >> (tx ? 0 : 8)) & 0xFF);
+                u8 p1 = (u8)((wh[ty * 8 + ry] >> (tx ? 0 : 8)) & 0xFF);
+                mm_tiles[tile * 16 + ry * 2]     = p0;
+                mm_tiles[tile * 16 + ry * 2 + 1] = (u8)~p1;
+            }
+        }
+
+    /* place the 4 tile refs (TL,TR,BL,BR) at rows 0-1, cols 30-31 */
+    bg3map[0 * 32 + MM_COL]     = (u16)(MM_TILE0)     | (BG3_TEXT_PAL << 10) | 0x2000;
+    bg3map[0 * 32 + MM_COL + 1] = (u16)(MM_TILE0 + 1) | (BG3_TEXT_PAL << 10) | 0x2000;
+    bg3map[1 * 32 + MM_COL]     = (u16)(MM_TILE0 + 2) | (BG3_TEXT_PAL << 10) | 0x2000;
+    bg3map[1 * 32 + MM_COL + 1] = (u16)(MM_TILE0 + 3) | (BG3_TEXT_PAL << 10) | 0x2000;
+    mm_dirty = 1;
+    game_map_dirty = 1;
+}
+
+/* Drop the minimap's cached state so it rebuilds on the next frame (level load /
+ * respawn). Assume every section has gems until the round-robin scan corrects it. */
+void render_minimap_reset(void) {
+    u8 i;
+    for (i = 0; i < MAX_SECTIONS; i++) mm_has_gems[i] = 1;
+    mm_scan = 0; mm_blink = 0; mm_sig = 0xFFFFFFFF;
 }
 
 /* ---- text scenes (title / game over / victory) on BG1 ---- */

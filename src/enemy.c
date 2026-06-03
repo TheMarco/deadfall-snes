@@ -26,6 +26,22 @@ static u16 separation_penalty(Enemy *e, s8 nx, s8 ny, Enemy *all, u8 count) {
     return pen;
 }
 
+/* TRUE if another live enemy in the same section occupies cell (cx,cy) -- either
+ * resting there, or sliding into it (target) so two never overlap or pass through
+ * each other. Cross-section candidate cells are allowed (handled elsewhere). */
+static u8 enemy_cell_blocked(Enemy *e, s8 cx, s8 cy, Enemy *all, u8 count) {
+    u8 i;
+    if (cx < 0 || cx >= GRID_COLS || cy < 0 || cy >= GRID_ROWS) return 0;
+    for (i = 0; i < count; i++) {
+        Enemy *o = &all[i];
+        if (o == e || !o->alive) continue;
+        if (o->section_row != e->section_row || o->section_col != e->section_col) continue;
+        if (o->x == (u8)cx && o->y == (u8)cy) return 1;                    /* its cell */
+        if (o->is_moving && (s8)o->target_x == cx && (s8)o->target_y == cy) return 1; /* its destination */
+    }
+    return 0;
+}
+
 static void enemy_apply_move(Enemy *e, s8 dx, s8 dy) {
     if (dx < 0)      e->direction = DIR_LEFT;
     else if (dx > 0) e->direction = DIR_RIGHT;
@@ -56,6 +72,7 @@ static void enemy_move_towards_player(Enemy *e, Enemy *all, u8 count) {
         u16 d, score;
         if (!ai_can_move(e->section_row, e->section_col, e->x, e->y, dx, dy)) continue;
         nx = (s8)(e->x + dx); ny = (s8)(e->y + dy);
+        if (enemy_cell_blocked(e, nx, ny, all, count)) continue;   /* never overlap/pass another enemy */
 
         if (same) {
             u8 bd = ai_dist((u8)nx, (u8)ny);   /* shared player distance field */

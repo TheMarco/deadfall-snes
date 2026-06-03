@@ -82,8 +82,14 @@ PAL0_SUBGROUPS = [([1, 2, 3, 7], 10), ([4, 5, 6], 5)]   # (block+boulder, gem); 
 # pal1 also budgeted: the blue markers dominate by pixel count, so the lone GOLD
 # extra-life star gets a reserved share or it nearest-maps to silver.
 PAL1_SUBGROUPS = [([8, 9, 10, 11, 12, 13, 15], 10), ([14], 3)]  # (blue markers, gold star); +transp/white/black = 16
+# Metatiles 16,17 = block shatter (frames 3,4); 18,19 = gem shatter. They live in
+# pal0 (block/gem material) but are NOT given their own palette budget -- they're
+# nearest-mapped to the static block/gem colors (a brief destruction flash), so
+# the persistent block/gem/boulder keep their full color fidelity.
+PAL0_CRUSH = [16, 17, 18, 19]
+NMETA = 20
 # Per-metatile sub-palette for render.c (mirrors the grouping above).
-MT_PAL = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1]
+MT_PAL = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0]
 
 
 def enc_tile(t):
@@ -171,19 +177,24 @@ def gameplay_tiles(gem_sheet="gem-1.png", iron_col=0, block_tint=None):
         block = apply_tint(block, block_tint)
     portal = load("portal.png"); spawn = load("spawn-point.png")
     rspawn = load("robot-spawn-point.png"); elife = load("extralife.png")
-    tiles = [None] * 16
+    tiles = [None] * 20
     tiles[0] = Image.new("RGBA", (16, 16), (0, 0, 0, 0))    # empty/transparent
-    tiles[1] = frame(block, 0, 0); tiles[2] = frame(block, 2, 0); tiles[3] = frame(block, 4, 0)
-    tiles[4] = frame(gem, 0, 0);   tiles[5] = frame(gem, 2, 0);   tiles[6] = frame(gem, 4, 0)
+    # block/gem damage states = frames 0,1,2 (intact -> cracked), matching the
+    # original's static damage; the shatter frames 3,4 are the crush animation.
+    tiles[1] = frame(block, 0, 0); tiles[2] = frame(block, 1, 0); tiles[3] = frame(block, 2, 0)
+    tiles[4] = frame(gem, 0, 0);   tiles[5] = frame(gem, 1, 0);   tiles[6] = frame(gem, 2, 0)
     tiles[7] = frame(iron, iron_col, 0)
     tiles[8] = frame(portal, 0, 0); tiles[9] = frame(portal, 2, 0)
     tiles[10] = frame(portal, 4, 0); tiles[11] = frame(portal, 6, 0)
     tiles[12] = frame(spawn, 0, 0); tiles[13] = frame(spawn, 1, 0)
     tiles[14] = frame(elife, 0, 0)
     tiles[15] = frame(rspawn, 0, 0)
-    for i in range(1, 16):              # all game objects pop more vs the faded bg
+    # crush (destruction) animation frames -- shatter; played on destroy.
+    tiles[16] = frame(block, 3, 0); tiles[17] = frame(block, 4, 0)   # block shatter
+    tiles[18] = frame(gem, 3, 0);   tiles[19] = frame(gem, 4, 0)     # gem shatter
+    for i in range(1, 20):              # all game objects + shatter pop vs the faded bg
         tiles[i] = boost(tiles[i])
-    for i in (1, 2, 3, 4, 5, 6, 7):     # block, gem, boulder also get the depth bevel
+    for i in (1, 2, 3, 4, 5, 6, 7):     # block, gem, boulder get the depth bevel (not shatter)
         tiles[i] = bevel(tiles[i])
     return tiles
 
@@ -226,6 +237,7 @@ def build_pal0(tiles):
         palette += _mediancut(tiles, sub_mts, budget)
         mts += sub_mts
     palette = (palette + [(0, 0, 0)] * 16)[:16]
+    mts += PAL0_CRUSH      # shatter frames: indexed against (not budgeted into) the palette
     return _index_tiles(tiles, mts, palette), palette
 
 
@@ -258,7 +270,7 @@ def build_bg_tiles(level=1, out_base=None):
     idxmap = {**g0, **g1}
 
     pic = bytearray()
-    for mt in range(16):
+    for mt in range(NMETA):
         a = idxmap[mt]
         for sy, sx in ((0, 0), (0, 8), (8, 0), (8, 8)):        # TL, TR, BL, BR
             pic += enc_tile(a[sy:sy + 8, sx:sx + 8])

@@ -18,6 +18,7 @@
 #define VRAM_BG3_TILES  0x5000   /* HUD/text 2bpp font (BG3), tiles 0..63    */
 #define VRAM_BG3_MAP    0x5400   /* BG3 32x32 tilemap (HUD + scene text)     */
 #define BG3_TEXT_PAL    4        /* 2bpp sub-palette 4 -> CGRAM 16..19 (white@17) */
+#define HUD_ICON_LIFE   64       /* BG3 tile 64: custom life (heart) glyph, past the font (0..63) */
 #define VRAM_OBJ_TILES  0x6000   /* OBJ base: player tiles 0..63         */
 #define VRAM_OBJ_ENEMY  0x6400   /* enemy tiles 64..127                  */
 #define VRAM_OBJ_ROBOT  0x6800   /* robot tiles 128..223                 */
@@ -55,15 +56,18 @@
 #define OAM_FALL_BASE  10    /* slots 10..(10+MAX_FALL_ANIMS-1): smooth falling tiles */
 #define MAX_FALL_ANIMS 16
 
-/* BG1 metatile indices (each = 4 sequential 8x8 tiles). */
-#define MT_EMPTY     0
-#define MT_BLOCK0    1
-#define MT_GEM0      4
-#define MT_BOULDER   7
-#define MT_PORTAL0   8
-#define MT_SPAWN0    12
-#define MT_EXTRALIFE 14
-#define MT_ROBOTSPN  15
+/* BG1 metatile indices (each = 4 sequential 8x8 tiles). 20 metatiles total. */
+#define MT_EMPTY       0
+#define MT_BLOCK0      1
+#define MT_GEM0        4
+#define MT_BOULDER     7
+#define MT_PORTAL0     8
+#define MT_SPAWN0      12
+#define MT_EXTRALIFE   14
+#define MT_ROBOTSPN    15
+#define MT_BLOCK_CRUSH 16   /* block shatter frames 3,4 (16,17): destruction anim */
+#define MT_GEM_CRUSH   18   /* gem shatter   frames 3,4 (18,19): destruction anim */
+#define NB_METATILES   20
 
 void render_init(void);        /* Mode 1, load gfx/palettes, build+show 1st section */
 void render_set_background(void);  /* load the current section's BG2 (caller force-blanked) */
@@ -78,6 +82,7 @@ void render_apply_scroll(void);     /* write shadowed scroll to PPU regs; call i
 void render_slide_player(u16 cam);  /* draw player entering the new section during a slide */
 void render_slide_end(void);        /* back to single-screen, scroll 0 */
 void render_set_cell(u8 gx, u8 gy); /* update just one grid cell's 4 BG entries (cheap)       */
+void render_crush_cell(u8 gx, u8 gy, u8 mt); /* draw an explicit metatile (shatter frame) at a cell */
 void render_clear_cell(u8 gx, u8 gy); /* blank a grid cell's BG entries (tile is in-flight as OBJ) */
 void render_fall(u8 slot, u8 type, u16 px, u16 py); /* draw a falling tile OBJ at screen pixel */
 void render_falls_hide(void);       /* hide all falling-tile OBJ slots                         */
@@ -87,6 +92,8 @@ void render_enemies(void);     /* place/hide enemy sprites (active section only)
 void render_robot(void);       /* place/hide the robot sprite (active section only)   */
 void render_lightning(void);   /* draw/hide the zap beam segments                     */
 u8   render_hud(void);         /* redraw HUD into BG1 rows 1-2 if changed; TRUE if so */
+void render_minimap(void);     /* update the monochrome section minimap (top-right)  */
+void render_minimap_reset(void); /* drop minimap cache so it rebuilds (level load)    */
 void render_clear_screen(void);            /* clear the whole BG1 tilemap (text scenes) */
 void render_text(u8 x, u8 y, const char *s); /* HUD-font text anywhere on BG1           */
 void render_num(u8 x, u8 y, u32 val, u8 digits); /* HUD-font fixed-width number          */

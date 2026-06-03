@@ -21,7 +21,7 @@ u8 game_map_dirty;
 
 static u8 trans_hold;   /* slide: hold one aligned frame before committing (vblank scroll lag) */
 
-static void check_falls_crush(void);   /* fwd: start_gravity crushes on settle */
+static void check_falls_crush(u8 include_player);   /* fwd; player crush is usually per-frame */
 
 /* ---- smooth falling tiles ---------------------------------------------------
  * Gravity settles the grid instantly (logic), but each tile that moved slides
@@ -31,6 +31,8 @@ typedef struct { u8 active, type, col, to_y; s16 py, py_end; } FallAnim;
 static FallAnim fall_anim[MAX_FALL_ANIMS];
 static u8 fall_anim_n;
 #define FALL_DY 3                /* px/frame (~90ms per cell, near the JS 100ms) */
+
+static u8 crush_pending;         /* a destroy is mid-shatter -> run gravity when it ends */
 
 /* Land any still-falling tiles immediately (draw on BG1) and clear their OBJ. */
 static void finalize_falls(void) {
@@ -47,7 +49,8 @@ static void start_gravity(void) {
     u8 i;
     finalize_falls();            /* land leftovers from any prior fall first */
     game.fall_count = gravity_settle(game.fall_tiles, SECTION_TILES);  /* grid -> final */
-    check_falls_crush();         /* crush on the settled grid (player + enemies) */
+    check_falls_crush(0);        /* crush enemies on settle; the player is crushed
+                                  * per-frame as the tiles fall, so you can escape */
     fall_anim_n = 0;
     for (i = 0; i < game.fall_count; i++) {
         FallTile *f = &game.fall_tiles[i];
@@ -89,10 +92,10 @@ static u8 find_spawn(u8 *sx, u8 *sy, u8 *srow, u8 *scol) {
 
 /* Falling tiles crush whoever they land on/pass through (player -> death,
  * enemy -> +500). Robots are immune (handled elsewhere). */
-static void check_falls_crush(void) {
+static void check_falls_crush(u8 include_player) {
     u8 i, j, cx, cy;
 
-    if (game.player.alive && !game.death_pending) {
+    if (include_player && game.player.alive && !game.death_pending) {
         u8 gx = game.player.x, gy = game.player.y;   /* grid/target cell */
         player_cell(&cx, &cy);                        /* visual (pixel) cell */
         for (i = 0; i < game.fall_count; i++) {
@@ -169,8 +172,11 @@ static void load_level(u8 n) {
     game.crush_safety_timer = 0;
     game.death_pending = 0;
     fall_anim_n = 0;              /* drop any in-flight falling-tile anims */
+    for (i = 0; i < 16; i++) game.cell_anims[i].active = 0;  /* drop shatter anims */
+    crush_pending = 0;
     game.gravity_resolving = 0;
     render_falls_hide();
+    render_minimap_reset();       /* rebuild the minimap for the new level's world */
     render_clear_screen();        /* wipe any leftover scene text (e.g. title) from BG3 */
     render_bg2_reset();           /* start section = BG2 phase 0 */
     render_build_map();
@@ -198,8 +204,60 @@ void game_continue(void) {
     game_map_dirty = 1;
 }
 
+/* ---- crush (destruction) animation -----------------------------------------
+ * When mining destroys a block/gem, the original plays a 2-frame shatter (sheet
+ * frames 3,4 -> metatiles 16/17 block, 18/19 gem) for ~200ms each, and only
+ * THEN does gravity run. We reuse game.cell_anims[]; .kind holds the base
+ * shatter metatile, so the rendered frame is (kind + stage). The deferred
+ * gravity gives the player a head start to escape whatever was being held up
+ * (the "time to get away" the original grants). */
+static void crush_anim_add(u8 gx, u8 gy, u8 base_mt) {
+    u8 i;
+    for (i = 0; i < 16; i++) {
+        CellAnim *a = &game.cell_anims[i];
+        if (a->active) continue;
+        a->active = 1; a->x = gx; a->y = gy;
+        a->row = game.cur_row; a->col = game.cur_col;
+        a->kind = base_mt;                       /* base shatter metatile (16 or 18) */
+        a->stage = 0;
+        a->timer = CRUSH_ANIM_FRAMES;
+        render_crush_cell(gx, gy, base_mt);      /* show shatter frame 0 immediately */
+        game_map_dirty = 1;
+        return;
+    }
+    render_set_cell(gx, gy);                      /* no free slot -> just clear the cell */
+}
+
+/* Advance every active shatter; when the last one ends, release deferred gravity. */
+static void crush_anims_update(void) {
+    u8 i, any = 0, ended = 0;
+    for (i = 0; i < 16; i++) {
+        CellAnim *a = &game.cell_anims[i];
+        if (!a->active) continue;
+        if (a->timer) a->timer--;
+        if (a->timer == 0) {
+            a->stage++;
+            if (a->stage >= CRUSH_ANIM_STAGES) {     /* shatter done -> final cell */
+                a->active = 0;
+                render_set_cell(a->x, a->y);          /* empty, or a revealed 1-up */
+                game_map_dirty = 1;
+                ended = 1;
+            } else {
+                a->timer = CRUSH_ANIM_FRAMES;
+                render_crush_cell(a->x, a->y, (u8)(a->kind + a->stage));  /* frame 4 */
+                game_map_dirty = 1;
+            }
+        }
+        if (a->active) any = 1;
+    }
+    if (ended && !any && crush_pending) {            /* all shatters finished */
+        crush_pending = 0;
+        start_gravity();
+    }
+}
+
 static void do_mine(s8 dx, s8 dy) {
-    u8 tile, destroyed, mx, my;
+    u8 tile, destroyed, mx, my, base_mt;
     if (game.mine_cooldown) return;
     if (!player_mine(dx, dy, &tile, &destroyed, &mx, &my)) return;
 
@@ -207,8 +265,10 @@ static void do_mine(s8 dx, s8 dy) {
     game_map_dirty = 1;
     if (!destroyed) { audio_sfx(SFX_CRUSH); render_set_cell(mx, my); return; }  /* a mining hit */
 
+    base_mt = MT_BLOCK_CRUSH;
     if (tile == TILE_GEM) {
         world_set_tile(mx, my, TILE_EMPTY);
+        base_mt = MT_GEM_CRUSH;
         game.gems_collected++;
         game.score += SCORE_GEM;
         if (game.gems_collected >= game.total_gems) {
@@ -219,18 +279,19 @@ static void do_mine(s8 dx, s8 dy) {
             audio_sfx(SFX_COLLECT);
         }
     } else if (tile == TILE_EXTRA_LIFE_BLK) {
-        world_set_tile(mx, my, TILE_EXTRA_LIFE);   /* reveal the 1-up */
+        world_set_tile(mx, my, TILE_EXTRA_LIFE);   /* reveal the 1-up (after the shatter) */
         audio_sfx(SFX_CRUSH);
     } else {
         world_set_tile(mx, my, TILE_EMPTY);        /* plain block destroyed */
         audio_sfx(SFX_CRUSH);
     }
     world_clear_damage(mx, my);
-    render_set_cell(mx, my);
+    /* play the shatter; gravity is deferred until it finishes (crush_anims_update) */
+    crush_anim_add(mx, my, base_mt);
+    crush_pending = 1;
     /* block walking into the just-cleared cell until gravity settles (crush safety) */
     game.crushed_x = mx; game.crushed_y = my;
     game.crush_safety_timer = CRUSH_SAFETY_FRAMES;
-    start_gravity();
 }
 
 static void cancel_push(void) { game.push_pending = 0; }
@@ -283,7 +344,7 @@ static void do_move(s8 dx, s8 dy) {
             world_adjacent(r.dir, &adj);
             player_transition_to(adj.row, adj.col, r.entry_x, r.entry_y);
             game.fall_count = gravity_settle(game.fall_tiles, SECTION_TILES);
-            check_falls_crush();
+            check_falls_crush(1);     /* section already settled on entry -> instant */
             render_slide_begin(r.dir, game.cur_row, game.cur_col);
             game.trans_phase = 2;                  /* 2 = slide */
             game.trans_timer = TRANSITION_FRAMES;
@@ -369,7 +430,7 @@ void game_update(void) {
                 setScreenOff();                            /* forced blank for the bg DMA */
                 player_transition_to(adj.row, adj.col, game.trans_entry_x, game.trans_entry_y);
                 game.fall_count = gravity_settle(game.fall_tiles, SECTION_TILES);
-                check_falls_crush();
+                check_falls_crush(1);     /* section already settled on entry -> instant */
                 render_build_map();
                 render_set_background();                    /* new section's backdrop */
                 render_flush_map();
@@ -386,6 +447,10 @@ void game_update(void) {
         return;
     }
 
+    /* tile-destruction shatter: advance any crush frames; releases the deferred
+     * gravity when the last shatter finishes (the player's grace window). */
+    crush_anims_update();
+
     /* smooth gravity: slide each in-flight tile down; draw it on BG1 when it lands */
     if (game.gravity_resolving) {
         u8 any = 0;
@@ -400,6 +465,20 @@ void game_update(void) {
                 game_map_dirty = 1;
             } else {
                 any = 1;
+            }
+        }
+        /* A falling tile only kills the player when it actually REACHES them
+         * (pixel overlap), so you get the fall's worth of time to run out from
+         * under it -- matching the original. (Enemies are crushed up-front.) */
+        if (game.player.alive && !game.death_pending) {
+            s16 ppx = game.player.pixel_x, ppy = game.player.pixel_y;
+            for (i = 0; i < fall_anim_n; i++) {
+                FallAnim *a = &fall_anim[i];
+                s16 fx, fy;
+                if (!a->active || a->type == TILE_EXTRA_LIFE) continue;
+                fx = (s16)((s16)(a->col * TILE_SIZE) - ppx); if (fx < 0) fx = (s16)(-fx);
+                fy = (s16)(a->py - ppy);                     if (fy < 0) fy = (s16)(-fy);
+                if (fx < TILE_SIZE && fy < TILE_SIZE) { player_die(); break; }
             }
         }
         if (!any) { render_falls_hide(); game.gravity_resolving = 0; }
@@ -456,22 +535,25 @@ void game_update(void) {
     }
     ai_distfield_work(32);   /* spread the flood: bounded work per frame */
 
-    /* enemies: chase + move */
-    for (i = 0; i < game.enemy_count; i++)
-        enemy_update(&game.enemies[i], game.enemies, game.enemy_count);
+    /* enemies: chase + move. Frozen while the player's death animation plays so
+     * nothing walks over the dying player. */
+    if (!game.death_pending)
+        for (i = 0; i < game.enemy_count; i++)
+            enemy_update(&game.enemies[i], game.enemies, game.enemy_count);
 
-    /* player touches a living enemy on the same section -> death */
+    /* player touches a living enemy on the same section -> death. PIXEL overlap
+     * (AABB), not cell match, so death fires the instant the 16x16 sprites touch
+     * -- player_die() freezes the player and the enemies freeze (above), so they
+     * never visibly overlap/pass through. */
     if (p->alive && !game.death_pending) {
-        u8 pcx, pcy;
-        player_cell(&pcx, &pcy);
         for (i = 0; i < game.enemy_count; i++) {
             Enemy *e = &game.enemies[i];
-            u8 evx, evy;
+            s16 ddx, ddy;
             if (!e->alive) continue;
             if (e->section_row != p->section_row || e->section_col != p->section_col) continue;
-            evx = (u8)((e->pixel_x + (TILE_SIZE / 2)) / TILE_SIZE);
-            evy = (u8)((e->pixel_y + (TILE_SIZE / 2)) / TILE_SIZE);
-            if ((e->x == p->x && e->y == p->y) || (evx == pcx && evy == pcy)) {
+            ddx = (s16)(p->pixel_x - e->pixel_x); if (ddx < 0) ddx = (s16)(-ddx);
+            ddy = (s16)(p->pixel_y - e->pixel_y); if (ddy < 0) ddy = (s16)(-ddy);
+            if (ddx < TILE_SIZE && ddy < TILE_SIZE) {
                 player_die();
                 break;
             }
@@ -574,4 +656,5 @@ void game_update(void) {
     }
     if (render_hud())             /* HUD lives in BG1 rows 0-1; redrawn only on change */
         game_map_dirty = 1;       /* upload the BG1 map when the HUD changed */
+    render_minimap();             /* monochrome section minimap (top-right of the bar) */
 }

@@ -68,6 +68,8 @@
 #define CRUSH_SAFETY_FRAMES 30   /* 500ms block on moving into a just-mined cell */
 #define DEATH_ANIM_FRAMES   7    /* 120ms per death frame (5 frames)     */
 #define DEATH_ANIM_COUNT    5
+#define CRUSH_ANIM_FRAMES   12   /* 200ms per shatter stage (matches JS)  */
+#define CRUSH_ANIM_STAGES   2    /* shatter frames 3,4 -> then gravity     */
 #define PORTAL_ANIM_FRAMES  9    /* 150ms per portal/glitter frame       */
 #define SPAWN_ANIM_FRAMES   12   /* 200ms spawn glow                     */
 #define TRANSITION_FRAMES   36   /* 600ms section slide                  */

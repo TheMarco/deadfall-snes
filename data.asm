@@ -1,9 +1,10 @@
 ; Deadfall SNES - ROM data (header + converted graphics).
 .include "hdr.asm"
 
-; ---- BG1 gameplay tilesets, one per level (4bpp, 16 metatiles + 2 palettes
-; ---- each). Per-level gem sprite, boulder frame, and block tint, matching the
-; ---- original. ~2KB each -> all 10 fit in one superfree bank. render_load_-
+; ---- BG1 gameplay tilesets, one per level (4bpp, 20 metatiles + 2 palettes
+; ---- each: 16 gameplay + 4 block/gem shatter frames). Per-level gem sprite,
+; ---- boulder frame, and block tint, matching the original. ~2.5KB each -> all
+; ---- 10 fit in one superfree bank (~26KB). render_load_-
 ; ---- gameplay_tiles() swaps in the current level's tiles + palettes. ----
 .section ".rodata_bgtiles" superfree
 bg_tiles_1_pic:  .incbin "res/bg_tiles_1.pic"
