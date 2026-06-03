@@ -315,6 +315,23 @@ void game_update(void) {
 
     game.frame++;
 
+    /* DEBUG (level select): tap Y with NO direction held -> jump to the next
+     * level (wraps 10->1), so each level's art is easy to check. Mining is
+     * Y+direction, so this never interferes with it. Edge-detected so holding Y
+     * jumps once. */
+    {
+        static u8 dbg_yprev = 0;
+        u8 ynow = (u8)((cur & PAD_Y) != 0);
+        u8 dirheld = (u8)((cur & (PAD_LEFT | PAD_RIGHT | PAD_UP | PAD_DOWN)) != 0);
+        if (ynow && !dbg_yprev && !dirheld && !game.transitioning &&
+            !game.death_pending && p->alive) {
+            dbg_yprev = ynow;
+            load_level((u8)(game.current_level >= MAX_LEVELS ? 1 : game.current_level + 1));
+            return;
+        }
+        dbg_yprev = ynow;
+    }
+
     /* section transition: fade screen out, switch section at black, fade in.
      * Gameplay (input, enemies, gravity) is frozen for the ~24 frames. */
     if (game.transitioning) {

@@ -1,12 +1,41 @@
 ; Deadfall SNES - ROM data (header + converted graphics).
 .include "hdr.asm"
 
-; ---- BG1 gameplay tileset (4bpp, 16 metatiles) + palette ----
+; ---- BG1 gameplay tilesets, one per level (4bpp, 16 metatiles + 2 palettes
+; ---- each). Per-level gem sprite, boulder frame, and block tint, matching the
+; ---- original. ~2KB each -> all 10 fit in one superfree bank. render_load_-
+; ---- gameplay_tiles() swaps in the current level's tiles + palettes. ----
 .section ".rodata_bgtiles" superfree
-bg_tiles_pic:  .incbin "res/bg_tiles.pic"
-bg_tiles_picend:
-bg_tiles_pal:  .incbin "res/bg_tiles.pal"
-bg_tiles_palend:
+bg_tiles_1_pic:  .incbin "res/bg_tiles_1.pic"
+bg_tiles_1_picend:
+bg_tiles_1_pal:  .incbin "res/bg_tiles_1.pal"
+bg_tiles_2_pic:  .incbin "res/bg_tiles_2.pic"
+bg_tiles_2_picend:
+bg_tiles_2_pal:  .incbin "res/bg_tiles_2.pal"
+bg_tiles_3_pic:  .incbin "res/bg_tiles_3.pic"
+bg_tiles_3_picend:
+bg_tiles_3_pal:  .incbin "res/bg_tiles_3.pal"
+bg_tiles_4_pic:  .incbin "res/bg_tiles_4.pic"
+bg_tiles_4_picend:
+bg_tiles_4_pal:  .incbin "res/bg_tiles_4.pal"
+bg_tiles_5_pic:  .incbin "res/bg_tiles_5.pic"
+bg_tiles_5_picend:
+bg_tiles_5_pal:  .incbin "res/bg_tiles_5.pal"
+bg_tiles_6_pic:  .incbin "res/bg_tiles_6.pic"
+bg_tiles_6_picend:
+bg_tiles_6_pal:  .incbin "res/bg_tiles_6.pal"
+bg_tiles_7_pic:  .incbin "res/bg_tiles_7.pic"
+bg_tiles_7_picend:
+bg_tiles_7_pal:  .incbin "res/bg_tiles_7.pal"
+bg_tiles_8_pic:  .incbin "res/bg_tiles_8.pic"
+bg_tiles_8_picend:
+bg_tiles_8_pal:  .incbin "res/bg_tiles_8.pal"
+bg_tiles_9_pic:  .incbin "res/bg_tiles_9.pic"
+bg_tiles_9_picend:
+bg_tiles_9_pal:  .incbin "res/bg_tiles_9.pal"
+bg_tiles_10_pic: .incbin "res/bg_tiles_10.pic"
+bg_tiles_10_picend:
+bg_tiles_10_pal: .incbin "res/bg_tiles_10.pal"
 .ends
 
 ; ---- HUD glyph font (4bpp 8x8, ASCII 32-95) + palette ----
@@ -25,18 +54,99 @@ hud_font2_picend:
 hud_font2_pal:  .incbin "res/hud_font2.pal"
 .ends
 
-; ---- Seamless repeating background texture (128x96 = 16x12 tiles, ~193
-; ---- unique). Tiled across BG2 for ALL levels: tiny + scrolls cleanly. ----
-; pic is ~30KB (256x256 = up to 1000 tiles); keep it alone so the section fits one
-; 32KB LoROM bank. map+pal live in a separate (tiny) superfree section.
-.section ".rodata_bgtexpic" superfree
-bgtex_pic: .incbin "res/bgtex.pic"
-bgtex_picend:
+; ---- Per-level seamless BG2 parallax textures (256x256 = 32x32 tiles, <=1023
+; ---- unique each). render_load_tileset() swaps in the current level's texture.
+; ---- Each pic is ~32KB so it MUST sit alone in its own superfree bank (the
+; ---- "<32KB per LoROM bank" rule); map+pal go in a separate tiny section.
+; ---- Level 1 reuses the original texture (res/bgtex_1.* == the old test3 bgtex).
+.section ".rodata_bgtex1pic" superfree
+bgtex_1_pic: .incbin "res/bgtex_1.pic"
+bgtex_1_picend:
+.ends
+.section ".rodata_bgtex1map" superfree
+bgtex_1_map: .incbin "res/bgtex_1.map"
+bgtex_1_pal: .incbin "res/bgtex_1.pal"
 .ends
 
-.section ".rodata_bgtexmap" superfree
-bgtex_map: .incbin "res/bgtex.map"
-bgtex_pal: .incbin "res/bgtex.pal"
+.section ".rodata_bgtex2pic" superfree
+bgtex_2_pic: .incbin "res/bgtex_2.pic"
+bgtex_2_picend:
+.ends
+.section ".rodata_bgtex2map" superfree
+bgtex_2_map: .incbin "res/bgtex_2.map"
+bgtex_2_pal: .incbin "res/bgtex_2.pal"
+.ends
+
+.section ".rodata_bgtex3pic" superfree
+bgtex_3_pic: .incbin "res/bgtex_3.pic"
+bgtex_3_picend:
+.ends
+.section ".rodata_bgtex3map" superfree
+bgtex_3_map: .incbin "res/bgtex_3.map"
+bgtex_3_pal: .incbin "res/bgtex_3.pal"
+.ends
+
+.section ".rodata_bgtex4pic" superfree
+bgtex_4_pic: .incbin "res/bgtex_4.pic"
+bgtex_4_picend:
+.ends
+.section ".rodata_bgtex4map" superfree
+bgtex_4_map: .incbin "res/bgtex_4.map"
+bgtex_4_pal: .incbin "res/bgtex_4.pal"
+.ends
+
+.section ".rodata_bgtex5pic" superfree
+bgtex_5_pic: .incbin "res/bgtex_5.pic"
+bgtex_5_picend:
+.ends
+.section ".rodata_bgtex5map" superfree
+bgtex_5_map: .incbin "res/bgtex_5.map"
+bgtex_5_pal: .incbin "res/bgtex_5.pal"
+.ends
+
+.section ".rodata_bgtex6pic" superfree
+bgtex_6_pic: .incbin "res/bgtex_6.pic"
+bgtex_6_picend:
+.ends
+.section ".rodata_bgtex6map" superfree
+bgtex_6_map: .incbin "res/bgtex_6.map"
+bgtex_6_pal: .incbin "res/bgtex_6.pal"
+.ends
+
+.section ".rodata_bgtex7pic" superfree
+bgtex_7_pic: .incbin "res/bgtex_7.pic"
+bgtex_7_picend:
+.ends
+.section ".rodata_bgtex7map" superfree
+bgtex_7_map: .incbin "res/bgtex_7.map"
+bgtex_7_pal: .incbin "res/bgtex_7.pal"
+.ends
+
+.section ".rodata_bgtex8pic" superfree
+bgtex_8_pic: .incbin "res/bgtex_8.pic"
+bgtex_8_picend:
+.ends
+.section ".rodata_bgtex8map" superfree
+bgtex_8_map: .incbin "res/bgtex_8.map"
+bgtex_8_pal: .incbin "res/bgtex_8.pal"
+.ends
+
+.section ".rodata_bgtex9pic" superfree
+bgtex_9_pic: .incbin "res/bgtex_9.pic"
+bgtex_9_picend:
+.ends
+.section ".rodata_bgtex9map" superfree
+bgtex_9_map: .incbin "res/bgtex_9.map"
+bgtex_9_pal: .incbin "res/bgtex_9.pal"
+.ends
+
+.section ".rodata_bgtex10pic" superfree
+bgtex_10_pic: .incbin "res/bgtex_10.pic"
+bgtex_10_picend:
+.ends
+.section ".rodata_bgtex10map" superfree
+bgtex_10_map: .incbin "res/bgtex_10.map"
+bgtex_10_pal: .incbin "res/bgtex_10.pal"
 .ends
 
 ; ---- Player OBJ sprite sheet (4bpp, 128-wide layout) + palette ----

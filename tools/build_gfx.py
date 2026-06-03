@@ -104,9 +104,39 @@ def bgr555(c):
     return r | (g << 5) | (b << 10)
 
 
-def gameplay_tiles(gem_sheet="gem-1.png", iron_col=0):
+# Per-level look matches the original (GameScene.js): the gem is a different
+# sprite per level (gem-<level>.png), the boulder a different frame of
+# iron-sprite.png (frame = level-1), and the block is tinted by a per-level
+# multiply colour (GameScene.js blockTints[]).
+BLOCK_TINTS = [
+    0xB0B0D0,  # L1  cool blue-gray
+    0xD0B0B0,  # L2  warm red-gray
+    0xB0D0B0,  # L3  cool green-gray
+    0xD0D0B0,  # L4  warm yellow-gray
+    0xC0B0D0,  # L5  purple-gray
+    0xB0D0D0,  # L6  cyan-gray
+    0xD0C0B0,  # L7  orange-gray
+    0xB0C0D0,  # L8  sky blue-gray
+    0xD0B0C0,  # L9  pink-gray
+    0xC0D0B0,  # L10 lime-gray
+]
+
+
+def apply_tint(img, tint):
+    """Phaser setTint: multiply each RGB channel by tint/255 (alpha untouched)."""
+    a = np.array(img.convert("RGBA"), dtype=np.uint16)
+    tr, tg, tb = (tint >> 16) & 0xFF, (tint >> 8) & 0xFF, tint & 0xFF
+    a[:, :, 0] = (a[:, :, 0] * tr) // 255
+    a[:, :, 1] = (a[:, :, 1] * tg) // 255
+    a[:, :, 2] = (a[:, :, 2] * tb) // 255
+    return Image.fromarray(a.astype(np.uint8), "RGBA")
+
+
+def gameplay_tiles(gem_sheet="gem-1.png", iron_col=0, block_tint=None):
     """The 16 gameplay metatiles as 16x16 RGBA images (index 0 = transparent)."""
     block = load("block.png");  gem = load(gem_sheet);  iron = load("iron-sprite.png")
+    if block_tint is not None:
+        block = apply_tint(block, block_tint)
     portal = load("portal.png"); spawn = load("spawn-point.png")
     rspawn = load("robot-spawn-point.png"); elife = load("extralife.png")
     tiles = [None] * 16
@@ -176,43 +206,35 @@ def build_pal1(tiles):
     return _index_tiles(tiles, mts, palette), palette
 
 
-def build_bg_tiles(gem_sheet="gem-1.png"):
-    """Write res/bg_tiles.pic (64 4bpp tiles) + res/bg_tiles.pal (32 BGR555
-    colors = pal0 then pal1), plus a truecolor-through-BGR555 debug preview."""
-    tiles = gameplay_tiles(gem_sheet)
+def build_bg_tiles(level=1, out_base=None):
+    """Write <out_base>.pic (64 4bpp tiles) + <out_base>.pal (32 BGR555 colors =
+    pal0 then pal1) for the given level: per-level gem sprite (gem-<level>.png),
+    boulder frame (level-1), and block multiply-tint (BLOCK_TINTS[level-1]). The
+    marker tiles (pal1) are identical across levels. Default out_base = bg_tiles_<level>."""
+    if out_base is None:
+        out_base = "bg_tiles_%d" % level
+    tiles = gameplay_tiles("gem-%d.png" % level, iron_col=level - 1,
+                           block_tint=BLOCK_TINTS[level - 1])
     tiles[0] = Image.new("RGBA", (16, 16), (0, 0, 0, 0))   # ensure empty stays transparent
     g0, pal0 = build_pal0(tiles)
     g1, pal1 = build_pal1(tiles)
     g0[0] = np.zeros((16, 16), np.uint8)                   # empty metatile -> all transparent
     idxmap = {**g0, **g1}
-    GROUP0_MT = [0] + [m for sub, _ in PAL0_SUBGROUPS for m in sub]
 
     pic = bytearray()
     for mt in range(16):
         a = idxmap[mt]
         for sy, sx in ((0, 0), (0, 8), (8, 0), (8, 8)):        # TL, TR, BL, BR
             pic += enc_tile(a[sy:sy + 8, sx:sx + 8])
-    with open(os.path.join(RES, "bg_tiles.pic"), "wb") as f:
+    with open(os.path.join(RES, out_base + ".pic"), "wb") as f:
         f.write(pic)
-    with open(os.path.join(RES, "bg_tiles.pal"), "wb") as f:
+    with open(os.path.join(RES, out_base + ".pal"), "wb") as f:
         for pal in (pal0, pal1):
             for c in pal:
                 v = bgr555(c)
                 f.write(bytes([v & 0xFF, (v >> 8) & 0xFF]))
-
-    # debug preview: render each metatile through its real BGR555 palette
-    prev = Image.new("RGB", (16, 16 * 16), (32, 32, 32))
-    for mt in range(16):
-        palette = (pal0 if mt in GROUP0_MT else pal1)
-        rgbpal = [tuple((int(ch) >> 3) * 255 // 31 for ch in col) for col in palette]
-        a = idxmap[mt]
-        cell = np.zeros((16, 16, 3), np.uint8)
-        for y in range(16):
-            for x in range(16):
-                cell[y, x] = rgbpal[a[y, x]]
-        prev.paste(Image.fromarray(cell), (0, mt * 16))
-    prev.resize((96, 96 * 16), Image.NEAREST).save(os.path.join(RES, "bg_tiles_preview.png"))
-    print(f"    -> bg_tiles.pic ({len(pic)}B), bg_tiles.pal (64B, 2 palettes)  OK")
+    print("    -> %s.pic (%dB), %s.pal (64B, 2 palettes)  OK" % (out_base, len(pic), out_base))
+    return idxmap, pal0, pal1
 
 
 def run_gfx2snes(idx_png, gs=16, colors=16):
@@ -297,8 +319,9 @@ def build_obj(sheet_rgba, base, colors=16):
 
 
 def main():
-    print(">> BG1 gameplay tileset (2 sub-palettes: structural pal0, special pal1)")
-    build_bg_tiles("gem-1.png")
+    print(">> BG1 gameplay tilesets, per level (gem-N + tinted block + boulder frame N-1)")
+    for lvl in range(1, 11):
+        build_bg_tiles(lvl)
 
     print(">> player sprite sheet (128-wide OBJ layout)")
     build_obj(load("player.png"), "spr_player")

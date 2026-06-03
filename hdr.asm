@@ -11,7 +11,8 @@
 .ENDME
 
 .ROMBANKSIZE $8000
-.ROMBANKS 32                    ; 8 Mbit (1 MB) LoROM - seamless bg texture is tiny
+.ROMBANKS 64                    ; 16 Mbit (2 MB) LoROM - 10 per-level 32KB bg textures
+                               ; need their own banks (2 MB is the LoROM ceiling)
 
 .SNESHEADER
   ID "SNES"
@@ -23,7 +24,7 @@
   LOROM
 
   CARTRIDGETYPE $00             ; ROM only (set $02 if SRAM added)
-  ROMSIZE $0A                   ; 8 Megabits (1 MB)
+  ROMSIZE $0B                   ; 16 Megabits (2 MB)
   SRAMSIZE $00
   COUNTRY $01                   ; USA / NTSC
   LICENSEECODE $00

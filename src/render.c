@@ -10,7 +10,17 @@ extern u8 videoMode;     /* mirror of REG_TM (main screen) */
 extern u8 videoModeSub;  /* mirror of REG_TS (sub screen)  */
 
 /* Converted graphics (see data.asm). */
-extern char bg_tiles_pic, bg_tiles_picend, bg_tiles_pal;
+/* Per-level BG1 gameplay tilesets (gem/boulder/block vary per level). */
+extern char bg_tiles_1_pic, bg_tiles_1_picend, bg_tiles_1_pal;
+extern char bg_tiles_2_pic, bg_tiles_2_picend, bg_tiles_2_pal;
+extern char bg_tiles_3_pic, bg_tiles_3_picend, bg_tiles_3_pal;
+extern char bg_tiles_4_pic, bg_tiles_4_picend, bg_tiles_4_pal;
+extern char bg_tiles_5_pic, bg_tiles_5_picend, bg_tiles_5_pal;
+extern char bg_tiles_6_pic, bg_tiles_6_picend, bg_tiles_6_pal;
+extern char bg_tiles_7_pic, bg_tiles_7_picend, bg_tiles_7_pal;
+extern char bg_tiles_8_pic, bg_tiles_8_picend, bg_tiles_8_pal;
+extern char bg_tiles_9_pic, bg_tiles_9_picend, bg_tiles_9_pal;
+extern char bg_tiles_10_pic, bg_tiles_10_picend, bg_tiles_10_pal;
 extern char spr_player_pic, spr_player_picend, spr_player_pal;
 extern char spr_enemy_pic, spr_enemy_picend, spr_enemy_pal;
 extern char spr_robot_pic, spr_robot_picend, spr_robot_pal;
@@ -25,7 +35,18 @@ extern char hud_font2_pal;                     /* BG3 sub-palette: white text on
 
 /* Seamless repeating background texture (128x96 = 16x12 tiles), tiled across
  * BG2 for every level. Tiny + resident, so the background scrolls cleanly. */
-extern char bgtex_pic, bgtex_picend, bgtex_map, bgtex_pal;
+/* Per-level BG2 parallax textures (256x256). render_load_tileset swaps in the
+ * current level's via bgtex_select(). Level 1 == the original test3 texture. */
+extern char bgtex_1_pic, bgtex_1_picend, bgtex_1_map, bgtex_1_pal;
+extern char bgtex_2_pic, bgtex_2_picend, bgtex_2_map, bgtex_2_pal;
+extern char bgtex_3_pic, bgtex_3_picend, bgtex_3_map, bgtex_3_pal;
+extern char bgtex_4_pic, bgtex_4_picend, bgtex_4_map, bgtex_4_pal;
+extern char bgtex_5_pic, bgtex_5_picend, bgtex_5_map, bgtex_5_pal;
+extern char bgtex_6_pic, bgtex_6_picend, bgtex_6_map, bgtex_6_pal;
+extern char bgtex_7_pic, bgtex_7_picend, bgtex_7_map, bgtex_7_pal;
+extern char bgtex_8_pic, bgtex_8_picend, bgtex_8_map, bgtex_8_pal;
+extern char bgtex_9_pic, bgtex_9_picend, bgtex_9_map, bgtex_9_pal;
+extern char bgtex_10_pic, bgtex_10_picend, bgtex_10_map, bgtex_10_pal;
 #define BGTEX_W 32   /* texture width in tiles  */
 #define BGTEX_H 32   /* texture height in tiles (256x256 -> fills the 32-tile map exactly) */
 
@@ -238,13 +259,57 @@ void render_slide_end(void) {
     slide_pending = 2;   /* render_flush_map commits (screen0 + single-screen) next vblank */
 }
 
-/* Load the seamless background texture into VRAM/CGRAM. Same for every level,
- * so only needed once (caller force-blanked for the tile DMA). */
+/* Current level's BG2 texture (set by bgtex_select on each load). */
+static u8  *cbg_pic, *cbg_picend, *cbg_pal;
+static u16 *cbg_map;
+
+/* Point the current-texture pointers at level N's bgtex (default: level 1, also
+ * used for the title where game.current_level is still 0). */
+static void bgtex_select(u8 level) {
+    switch (level) {
+        case 2:  cbg_pic=(u8*)&bgtex_2_pic;  cbg_picend=(u8*)&bgtex_2_picend;  cbg_map=(u16*)&bgtex_2_map;  cbg_pal=(u8*)&bgtex_2_pal;  break;
+        case 3:  cbg_pic=(u8*)&bgtex_3_pic;  cbg_picend=(u8*)&bgtex_3_picend;  cbg_map=(u16*)&bgtex_3_map;  cbg_pal=(u8*)&bgtex_3_pal;  break;
+        case 4:  cbg_pic=(u8*)&bgtex_4_pic;  cbg_picend=(u8*)&bgtex_4_picend;  cbg_map=(u16*)&bgtex_4_map;  cbg_pal=(u8*)&bgtex_4_pal;  break;
+        case 5:  cbg_pic=(u8*)&bgtex_5_pic;  cbg_picend=(u8*)&bgtex_5_picend;  cbg_map=(u16*)&bgtex_5_map;  cbg_pal=(u8*)&bgtex_5_pal;  break;
+        case 6:  cbg_pic=(u8*)&bgtex_6_pic;  cbg_picend=(u8*)&bgtex_6_picend;  cbg_map=(u16*)&bgtex_6_map;  cbg_pal=(u8*)&bgtex_6_pal;  break;
+        case 7:  cbg_pic=(u8*)&bgtex_7_pic;  cbg_picend=(u8*)&bgtex_7_picend;  cbg_map=(u16*)&bgtex_7_map;  cbg_pal=(u8*)&bgtex_7_pal;  break;
+        case 8:  cbg_pic=(u8*)&bgtex_8_pic;  cbg_picend=(u8*)&bgtex_8_picend;  cbg_map=(u16*)&bgtex_8_map;  cbg_pal=(u8*)&bgtex_8_pal;  break;
+        case 9:  cbg_pic=(u8*)&bgtex_9_pic;  cbg_picend=(u8*)&bgtex_9_picend;  cbg_map=(u16*)&bgtex_9_map;  cbg_pal=(u8*)&bgtex_9_pal;  break;
+        case 10: cbg_pic=(u8*)&bgtex_10_pic; cbg_picend=(u8*)&bgtex_10_picend; cbg_map=(u16*)&bgtex_10_map; cbg_pal=(u8*)&bgtex_10_pal; break;
+        default: cbg_pic=(u8*)&bgtex_1_pic;  cbg_picend=(u8*)&bgtex_1_picend;  cbg_map=(u16*)&bgtex_1_map;  cbg_pal=(u8*)&bgtex_1_pal;  break;
+    }
+}
+
+/* Load the current level's background texture into VRAM/CGRAM (caller
+ * force-blanked for the ~32KB tile DMA). */
 static void render_load_tileset(void) {
-    dmaCopyVram((u8 *)&bgtex_pic, VRAM_BG2_TILES, (u16)(&bgtex_picend - &bgtex_pic));
+    bgtex_select(game.current_level);
+    dmaCopyVram(cbg_pic, VRAM_BG2_TILES, (u16)(cbg_picend - cbg_pic));
     bgSetGfxPtr(1, VRAM_BG2_TILES);
-    setPalette((u8 *)&bgtex_pal, BG2_PAL * 16, 96 * 2);   /* CGRAM 32..127 */
+    setPalette(cbg_pal, BG2_PAL * 16, 96 * 2);   /* CGRAM 32..127 */
     bgSetMapPtr(1, VRAM_BG2_MAP, SC_32x32);
+}
+
+/* Load the current level's gameplay tileset (gem/boulder/block art + the two
+ * sub-palettes) into VRAM_BG1_TILES / CGRAM 0-31. Caller must be force-blanked.
+ * pal 1's reserved 0/1/2 = transparent/white/black keep the BG3 HUD intact. */
+void render_load_gameplay_tiles(u8 level) {
+    u8 *pic, *picend, *pal;
+    switch (level) {
+        case 2:  pic=(u8*)&bg_tiles_2_pic;  picend=(u8*)&bg_tiles_2_picend;  pal=(u8*)&bg_tiles_2_pal;  break;
+        case 3:  pic=(u8*)&bg_tiles_3_pic;  picend=(u8*)&bg_tiles_3_picend;  pal=(u8*)&bg_tiles_3_pal;  break;
+        case 4:  pic=(u8*)&bg_tiles_4_pic;  picend=(u8*)&bg_tiles_4_picend;  pal=(u8*)&bg_tiles_4_pal;  break;
+        case 5:  pic=(u8*)&bg_tiles_5_pic;  picend=(u8*)&bg_tiles_5_picend;  pal=(u8*)&bg_tiles_5_pal;  break;
+        case 6:  pic=(u8*)&bg_tiles_6_pic;  picend=(u8*)&bg_tiles_6_picend;  pal=(u8*)&bg_tiles_6_pal;  break;
+        case 7:  pic=(u8*)&bg_tiles_7_pic;  picend=(u8*)&bg_tiles_7_picend;  pal=(u8*)&bg_tiles_7_pal;  break;
+        case 8:  pic=(u8*)&bg_tiles_8_pic;  picend=(u8*)&bg_tiles_8_picend;  pal=(u8*)&bg_tiles_8_pal;  break;
+        case 9:  pic=(u8*)&bg_tiles_9_pic;  picend=(u8*)&bg_tiles_9_picend;  pal=(u8*)&bg_tiles_9_pal;  break;
+        case 10: pic=(u8*)&bg_tiles_10_pic; picend=(u8*)&bg_tiles_10_picend; pal=(u8*)&bg_tiles_10_pal; break;
+        default: pic=(u8*)&bg_tiles_1_pic;  picend=(u8*)&bg_tiles_1_picend;  pal=(u8*)&bg_tiles_1_pal;  break;
+    }
+    dmaCopyVram(pic, VRAM_BG1_TILES, (u16)(picend - pic));
+    setPalette(pal, 0, 16 * 2);            /* pal0 -> CGRAM 0-15  */
+    setPalette(pal + 32, 16, 16 * 2);      /* pal1 -> CGRAM 16-31 */
 }
 
 /* Fill the WHOLE BG2 map with the seamless texture tiled. Must cover all 32
@@ -252,7 +317,7 @@ static void render_load_tileset(void) {
  * any unfilled rows would wrap black bands into view. BGTEX_H=16 divides 32, so
  * the texture wraps cleanly. Uniform across sections, so it just scrolls. */
 void render_set_background(void) {
-    u16 *tex = (u16 *)&bgtex_map;        /* 16x16 texture map entries */
+    u16 *tex = cbg_map;                  /* current level's 32x32 texture map */
     u8 ty, tx;
     for (ty = 0; ty < 32; ty++)
         for (tx = 0; tx < 32; tx++)
@@ -267,9 +332,10 @@ void render_bg2_reset(void) {
     bgSetScroll(1, 0, 0);
 }
 
-/* Level load: force-blank, load the texture, fill the BG2 map. */
+/* Level load: force-blank, load this level's gameplay tiles + background. */
 void render_load_background(void) {
     setScreenOff();
+    render_load_gameplay_tiles(game.current_level);   /* per-level gem/boulder/block */
     render_load_tileset();
     render_set_background();
     /* Re-assert the single-screen, grid-aligned BG1 view -- exactly what the
@@ -296,16 +362,17 @@ void render_init(void) {
     WaitForVBlank();
 
     oamInit();
-    bgInitTileSet(0, (u8 *)&bg_tiles_pic, (u8 *)&bg_tiles_pal, 0,
-                  (u16)(&bg_tiles_picend - &bg_tiles_pic), 16 * 2,
+    /* Gameplay tiles are per-level (gem/boulder/block differ). bgInitTileSet
+     * establishes the BG1 gfx ptr + 16-color mode with level 1's tiles for the
+     * title; render_load_gameplay_tiles() swaps tiles+palettes on each level
+     * load. Two BG sub-palettes: pal 0 (block/boulder/gem) at CGRAM 0-15, pal 1
+     * (portal/spawn/extra-life/robot-spawn) at CGRAM 16-31. The BG3 HUD shares
+     * CGRAM 16-18 (transparent/white/black); pal 1 reserves those exact slots,
+     * and the HUD palette is re-asserted below, so they coexist. */
+    bgInitTileSet(0, (u8 *)&bg_tiles_1_pic, (u8 *)&bg_tiles_1_pal, 0,
+                  (u16)(&bg_tiles_1_picend - &bg_tiles_1_pic), 16 * 2,
                   BG_16COLORS, VRAM_BG1_TILES);
-    /* The gameplay tiles use TWO BG sub-palettes for richer color: pal 0
-     * (block/boulder/gem) was loaded above at CGRAM 0-15; pal 1 (portal/spawn/
-     * extra-life/robot-spawn) is the second half of bg_tiles.pal, loaded here at
-     * CGRAM 16-31. The BG3 HUD shares CGRAM 16-18 (transparent/white/black);
-     * pal 1 reserves those exact slots, and the HUD palette is re-asserted below,
-     * so they coexist. (The old BG1 HUD font is gone -- the HUD lives on BG3.) */
-    setPalette((u8 *)(&bg_tiles_pal) + 32, 16, 16 * 2);   /* pal1 -> CGRAM 16-31 */
+    setPalette((u8 *)(&bg_tiles_1_pal) + 32, 16, 16 * 2);   /* pal1 -> CGRAM 16-31 */
     oamInitGfxSet((u8 *)&spr_player_pic, (u16)(&spr_player_picend - &spr_player_pic),
                   (u8 *)&spr_player_pal, 16 * 2, OBJPAL_PLAYER, VRAM_OBJ_TILES, OBJ_SIZE16_L32);
     /* enemy tiles share the same OBJ base, loaded just after the player tiles */
