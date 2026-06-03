@@ -26,6 +26,11 @@ static void robot_apply_move(Robot *r, s8 dx, s8 dy) {
     r->target_y = (u8)(r->y + dy);
     r->is_moving = TRUE;
     r->move_timer = (u8)r->move_delay;
+    /* Precompute the per-frame slide step once (8.8 fixed point) -- see the
+     * matching comment in enemy.c; avoids ~2 software divides/frame. */
+    r->mv_accx = 0; r->mv_accy = 0;
+    r->mv_stepx = (s16)(((s16)(dx * TILE_SIZE) << 8) / (s16)r->move_delay);
+    r->mv_stepy = (s16)(((s16)(dy * TILE_SIZE) << 8) / (s16)r->move_delay);
 }
 
 static void robot_update_movement(Robot *r) {
@@ -43,11 +48,11 @@ static void robot_update_movement(Robot *r) {
         r->target_x = r->x; r->target_y = r->y;
         r->is_moving = FALSE;
     } else {
-        s16 elapsed = (s16)(r->move_delay - r->move_timer);
-        s16 tpx = (s16)((s8)r->target_x * TILE_SIZE);
-        s16 tpy = (s16)((s8)r->target_y * TILE_SIZE);
-        r->pixel_x = (s16)(r->start_pixel_x + (s16)((tpx - r->start_pixel_x) * elapsed) / (s16)r->move_delay);
-        r->pixel_y = (s16)(r->start_pixel_y + (s16)((tpy - r->start_pixel_y) * elapsed) / (s16)r->move_delay);
+        /* Divide-free slide (see enemy.c). */
+        r->mv_accx = (s16)(r->mv_accx + r->mv_stepx);
+        r->mv_accy = (s16)(r->mv_accy + r->mv_stepy);
+        r->pixel_x = (s16)(r->start_pixel_x + (r->mv_accx >> 8));
+        r->pixel_y = (s16)(r->start_pixel_y + (r->mv_accy >> 8));
     }
 }
 

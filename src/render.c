@@ -154,20 +154,32 @@ static u8  mm_px[16][16];                /* 16x16 colour-index build buffer */
 static u8  mm_has_gems[MAX_SECTIONS];    /* per-section "gems remain" (round-robin scanned) */
 static u8  mm_scan;                      /* round-robin scan cursor */
 static u16 mm_blink;                     /* phase counter */
-static u8  mm_dirty;                     /* tiles changed -> DMA in render_flush_map */
+static u8  mm_dirty = 0;                  /* tiles changed -> DMA in render_flush_map (boot-safe) */
 static u32 mm_sig = 0xFFFFFFFF;          /* last-drawn signature (skip rebuild if same) */
+static u8  mm_last_cur = 0xFF;            /* last current-section index (gate the sig rebuild) */
 
 /* 32x32 tilemap buffers (entry = tile number | palette<<10 | flips). */
 static u16 bg1map[32 * 32];
 static u16 bg2map[32 * 32];
 static u16 bg3map[32 * 32];   /* HUD + scene text (BG3, fixed, high priority) */
+static u8  bg3_dirty = 1;     /* bg3map changed -> upload it; else skip the 2KB DMA.
+                               * The HUD/text layer is static most frames, so this
+                               * halves the per-frame VRAM DMA (4KB->2KB) and keeps
+                               * the upload inside vblank (no tearing / no late frame). */
 static u16 bg1map2[32 * 32];  /* BG1 screen 1: adjacent section, staged during a slide */
+/* Cached flat base pointers for the CURRENT section's grid + damage, so the hot
+ * render_set_cell() avoids the world_section_index() variable-multiply and the
+ * [idx][y][x] stride math on every call. Refreshed whenever cur_row/cur_col change
+ * (render_build_map runs on every section change; the guard in render_set_cell is a
+ * safety net). Sentinel 0xFF forces the first refresh even with WRAM not zeroed. */
+static u8 *sc_grid, *sc_dmg;
+static u8  sc_last_r = 0xFF, sc_last_c = 0xFF;
 static u8  edge_last_mask;    /* last drawn enemy edge-warning mask (reset on screen clear) */
 
 /* Slide state. The staging (start) and commit (end) VRAM writes are deferred to
  * render_flush_map (which runs in vblank) so the screen never blanks -> no flash. */
 static s16 slide_stage_x;     /* screen-x where the new section sits (256=right, 0=left) */
-static u8  slide_pending;     /* 0 none, 1 stage adjacent (go 64-wide), 2 commit (back to 32) */
+static u8  slide_pending = 0; /* 0 none, 1 stage adjacent (go 64-wide), 2 commit (back to 32) */
 static u8  slide_dir;
 
 /* Scroll shadow: written during the frame, applied to the PPU regs in vblank
@@ -211,17 +223,22 @@ static u8 metatile_for(u8 t, u8 dmg) {
 
 /* Update one 16x16 grid cell's four 8x8 BG entries from the current section. */
 void render_set_cell(u8 gx, u8 gy) {
-    u8 idx = world_section_index(game.cur_row, game.cur_col);
-    u8 t   = game.sections[idx][gy][gx];
-    u8 mt  = metatile_for(t, game.damage[idx][gy][gx]);
-    u16 base = (u16)(mt * 4);
-    u16 pb  = mt_palbits[mt];                            /* sub-palette bits */
-    u16 col = (u16)(gx * 2);
-    u16 row = (u16)((PLAYFIELD_OFFSET_Y >> 3) + gy * 2);  /* below the HUD/margin */
-    bg1map[row * 32 + col]           = base | pb;             /* TL */
-    bg1map[row * 32 + col + 1]       = (u16)(base + 1) | pb;  /* TR */
-    bg1map[(row + 1) * 32 + col]     = (u16)(base + 2) | pb;  /* BL */
-    bg1map[(row + 1) * 32 + col + 1] = (u16)(base + 3) | pb;  /* BR */
+    u8  off, mt;
+    u16 base, pb, row, *m;
+    if (sc_last_r != game.cur_row || sc_last_c != game.cur_col) {   /* section changed */
+        u8 idx = world_section_index(game.cur_row, game.cur_col);
+        sc_grid = &game.sections[idx][0][0];
+        sc_dmg  = &game.damage[idx][0][0];
+        sc_last_r = game.cur_row; sc_last_c = game.cur_col;
+    }
+    off  = (u8)((gy << 4) + gx);                         /* flat section offset (GRID_COLS=16) */
+    mt   = metatile_for(sc_grid[off], sc_dmg[off]);
+    base = (u16)(mt * 4);
+    pb   = mt_palbits[mt];                               /* sub-palette bits */
+    row  = (u16)((PLAYFIELD_OFFSET_Y >> 3) + (gy << 1));
+    m    = &bg1map[((u16)row << 5) + ((u16)gx << 1)];    /* one index; +32 = next tile row */
+    m[0]  = base | pb;            m[1]  = (u16)(base + 1) | pb;   /* TL, TR */
+    m[32] = (u16)(base + 2) | pb; m[33] = (u16)(base + 3) | pb;   /* BL, BR */
 }
 
 /* Draw an explicit metatile (e.g. a shatter frame 16-19) into one grid cell,
@@ -230,35 +247,34 @@ void render_set_cell(u8 gx, u8 gy) {
 void render_crush_cell(u8 gx, u8 gy, u8 mt) {
     u16 base = (u16)(mt * 4);
     u16 pb  = mt_palbits[mt];
-    u16 col = (u16)(gx * 2);
-    u16 row = (u16)((PLAYFIELD_OFFSET_Y >> 3) + gy * 2);
-    bg1map[row * 32 + col]           = base | pb;
-    bg1map[row * 32 + col + 1]       = (u16)(base + 1) | pb;
-    bg1map[(row + 1) * 32 + col]     = (u16)(base + 2) | pb;
-    bg1map[(row + 1) * 32 + col + 1] = (u16)(base + 3) | pb;
+    u16 row = (u16)((PLAYFIELD_OFFSET_Y >> 3) + (gy << 1));
+    u16 *m  = &bg1map[((u16)row << 5) + ((u16)gx << 1)];
+    m[0]  = base | pb;            m[1]  = (u16)(base + 1) | pb;
+    m[32] = (u16)(base + 2) | pb; m[33] = (u16)(base + 3) | pb;
 }
 
 /* Blank a grid cell's four BG1 entries (the tile is shown as a falling OBJ
  * instead). Does NOT touch the world grid -- render_set_cell redraws it on land. */
 void render_clear_cell(u8 gx, u8 gy) {
-    u16 row = (u16)((PLAYFIELD_OFFSET_Y >> 3) + gy * 2);
-    u16 col = (u16)(gx * 2);
-    bg1map[row * 32 + col]           = 0;
-    bg1map[row * 32 + col + 1]       = 0;
-    bg1map[(row + 1) * 32 + col]     = 0;
-    bg1map[(row + 1) * 32 + col + 1] = 0;
+    u16 row = (u16)((PLAYFIELD_OFFSET_Y >> 3) + (gy << 1));
+    u16 *m  = &bg1map[((u16)row << 5) + ((u16)gx << 1)];
+    m[0] = 0; m[1] = 0; m[32] = 0; m[33] = 0;
 }
 
 void render_build_map(void) {
     u8 gx, gy;
     u16 i;
+    u8 idx = world_section_index(game.cur_row, game.cur_col);   /* refresh the section cache */
+    sc_grid = &game.sections[idx][0][0];
+    sc_dmg  = &game.damage[idx][0][0];
+    sc_last_r = game.cur_row; sc_last_c = game.cur_col;
     for (i = (PLAYFIELD_OFFSET_Y >> 3) * 32; i < 32 * 32; i++) bg1map[i] = 0; /* clear playfield rows (keep HUD/margin) */
     for (gy = 0; gy < GRID_ROWS; gy++)
         for (gx = 0; gx < GRID_COLS; gx++)
             render_set_cell(gx, gy);
 }
 
-void render_flush_map(void) {
+static void flush_map_impl(void) {
     /* Upload the regenerated minimap glyph tiles (VRAM tiles 65..68) in vblank. */
     if (mm_dirty) {     /* 16x16 OBJ: TL,TR on one tile row, BL,BR on the next (16-wide grid) */
         dmaCopyVram(mm_obj_tiles,      VRAM_OBJ_MINIMAP,            64);
@@ -292,7 +308,36 @@ void render_flush_map(void) {
         return;
     }
     dmaCopyVram((u8 *)bg1map, VRAM_BG1_MAP, 0x800);   /* 1024 entries * 2 bytes */
-    dmaCopyVram((u8 *)bg3map, VRAM_BG3_MAP, 0x800);   /* HUD/text layer        */
+    if (bg3_dirty) {                                  /* HUD/text rarely changes */
+        dmaCopyVram((u8 *)bg3map, VRAM_BG3_MAP, 0x800);
+        bg3_dirty = 0;
+    }
+}
+
+/* Re-entrancy guard: transitions call render_flush_map() directly on the main
+ * thread (screen off), while render_vblank() calls it from the NMI. If the NMI
+ * fires mid-flush, it must not reconfigure the DMA channel underneath the main
+ * thread -- so the second caller just bails. */
+static volatile u8 flushing = 0;
+void render_flush_map(void) {
+    if (flushing) return;
+    flushing = 1;
+    flush_map_impl();
+    flushing = 0;
+}
+
+/* VBlank ISR hook (installed via nmiSet): do the VRAM upload INSIDE vblank so it
+ * always lands in the blanking window -- never spilling into active display
+ * (the tearing) and never delaying the next game_update (which started the
+ * stutter). vblank_flag is set only on non-lag frames, so on a frame where
+ * game_update overran we skip the upload (the bg maps may be half-built) and
+ * catch it next frame -- no torn/partial map. */
+void render_vblank(void) {
+    if (!vblank_flag) return;
+    if (game_map_dirty || slide_pending || mm_dirty) {
+        render_flush_map();
+        game_map_dirty = 0;
+    }
 }
 
 /* Build an arbitrary section's playfield metatiles into a tilemap buffer. */
@@ -900,6 +945,7 @@ static void hud_putc(u8 x, u8 y, char c) {
      * = per-tile priority: with REG_BGMODE bit3 set this lifts the glyph ABOVE
      * BG1/BG2 (without it, BG3 sits at the very back, behind the opaque BG2). */
     bg3map[y * 32 + x] = (u16)(c - 32) | (BG3_TEXT_PAL << 10) | 0x2000;
+    bg3_dirty = 1;
 }
 static void hud_puts(u8 x, u8 y, const char *s) {
     while (*s) hud_putc(x++, y, *s++);
@@ -966,7 +1012,7 @@ void render_minimap(void) {
     u8  nsec = (u8)(game.world_rows * game.world_cols);
     u8  cur  = world_section_index(game.cur_row, game.cur_col);
     u32 sig;
-    u8  r, c, idx, x, y, tx, ty;
+    u8  r, c, idx, x, y, tx, ty, scanned = 0;
 
     mm_blink++;
 
@@ -975,15 +1021,25 @@ void render_minimap(void) {
            (u16)OBJN_MINIMAP, OBJPAL_MINIMAP);
     oamSetEx((u16)(OAM_MINIMAP * 4), OBJ_SMALL, OBJ_SHOW);
 
-    /* round-robin gem scan, every 4th frame (cheap) */
-    if (nsec && (mm_blink & 3) == 0) {
+    /* round-robin gem scan, every 16th frame (was 4th: the 208-cell scan + the
+     * multiply/32-bit-shift signature rebuild is a per-frame spike; 16 keeps the
+     * minimap fresh while cutting that spike 4x). */
+    if (nsec && (mm_blink & 15) == 0) {
         u8 s = (u8)(mm_scan % nsec);
         u8 *g = &game.sections[s][0][0];
         u8 has = 0, k;
         for (k = 0; k < SECTION_TILES; k++) if (g[k] == TILE_GEM) { has = 1; break; }
         mm_has_gems[s] = has;
         mm_scan = (u8)(s + 1);
+        scanned = 1;
     }
+
+    /* The signature only moves when the round-robin just rescanned a section, or
+     * when the current section changed. On the other ~3/4 frames it is identical
+     * to last frame, so skip the 16-iteration rebuild (which costs a per-section
+     * world_section_index multiply + a 32-bit variable shift each). */
+    if (!scanned && cur == mm_last_cur) return;
+    mm_last_cur = cur;
 
     sig = 0;
     for (r = 0; r < game.world_rows; r++)
@@ -1036,7 +1092,7 @@ void render_minimap(void) {
 void render_minimap_reset(void) {
     u8 i;
     for (i = 0; i < MAX_SECTIONS; i++) mm_has_gems[i] = 1;
-    mm_scan = 0; mm_blink = 0; mm_sig = 0xFFFFFFFF;
+    mm_scan = 0; mm_blink = 0; mm_sig = 0xFFFFFFFF; mm_last_cur = 0xFF;
 }
 
 /* ---- text scenes (title / game over / victory) on BG1 ---- */
@@ -1048,6 +1104,7 @@ void render_clear_screen(void) {
      * black. During gameplay/other scenes BG2 is opaque, so this stays hidden. */
     u16 blk = (u16)(BG3_TEXT_PAL << 10);
     for (i = 0; i < 32 * 32; i++) { bg1map[i] = 0; bg3map[i] = blk; }
+    bg3_dirty = 1;
     edge_last_mask = 0;        /* edge-warning strips were just wiped */
     oamSetVisible((u16)(OAM_MINIMAP * 4), OBJ_HIDE);  /* no minimap on text scenes */
 }
@@ -1135,6 +1192,7 @@ void render_flash(const char *s) {
 void render_flash_clear(void) {
     u8 x;
     for (x = flash_x0; x < flash_x1; x++) bg3map[FLASH_ROW * 32 + x] = 0;
+    bg3_dirty = 1;
 }
 
 /* Draw the enemy edge-warning strips for the given direction mask (bit0=up,
@@ -1155,5 +1213,6 @@ void render_edge_warn(u8 mask) {
         bg3map[i * 32 + 0]  = (mask & 4) ? (u16)(EDGE_TILE_LEFT | P) : 0;
         bg3map[i * 32 + 31] = (mask & 8) ? (u16)(EDGE_TILE_LEFT | P | 0x4000) : 0;  /* H-flip */
     }
+    bg3_dirty = 1;
     game_map_dirty = 1;
 }

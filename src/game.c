@@ -31,7 +31,7 @@ static void check_section_cleared(void);            /* fwd; flashes "SECTION CLE
 typedef struct { u8 active, type, col, to_y, dmg; s16 py, py_end; } FallAnim;
 static FallAnim fall_anim[MAX_FALL_ANIMS];
 static u8 fall_anim_n;
-#define FALL_DY 3                /* px/frame (~90ms per cell, near the JS 100ms) */
+#define FALL_DY 5                /* px/frame -- faster falling to match the original feel */
 
 static u8 crush_pending;         /* a destroy is mid-shatter -> run gravity when it ends */
 static u8 crush_completed;        /* a mine just destroyed a tile -> lock mining until the
@@ -410,14 +410,22 @@ static void update_edge_warnings(void) {
     static const s8 edr[4] = { -1, 1, 0, 0 };   /* up, down, left, right */
     static const s8 edc[4] = {  0, 0, -1, 1 };
     u8 nearedge[4], d, mask = 0;
-    s16 pgx = (s16)(p->section_col * GRID_COLS + p->x);
-    s16 pgy = (s16)(p->section_row * GRID_ROWS + p->y);
-    s16 totc = (s16)(game.world_cols * GRID_COLS);
-    s16 totr = (s16)(game.world_rows * GRID_ROWS);
+    s16 pgx, pgy, totc, totr;
+    /* The mask is forced to 0 on the blink-off phase, and stays 0 unless the player
+     * is within 3 tiles of a section edge -- both are the common case. Bail out
+     * BEFORE the per-enemy scan + its *13 multiplies/divides in those cases. */
+    if (!((game.frame >> 3) & 1)) { render_edge_warn(0); return; }   /* blink off */
     nearedge[0] = (u8)(p->y <= 3);
     nearedge[1] = (u8)(p->y >= GRID_ROWS - 1 - 3);
     nearedge[2] = (u8)(p->x <= 3);
     nearedge[3] = (u8)(p->x >= GRID_COLS - 1 - 3);
+    if (!(nearedge[0] | nearedge[1] | nearedge[2] | nearedge[3])) {
+        render_edge_warn(0); return;                                /* not near any edge */
+    }
+    pgx = (s16)(p->section_col * GRID_COLS + p->x);
+    pgy = (s16)(p->section_row * GRID_ROWS + p->y);
+    totc = (s16)(game.world_cols * GRID_COLS);
+    totr = (s16)(game.world_rows * GRID_ROWS);
     for (d = 0; d < 4; d++) {
         u8 ar, ac, i, hit = 0;
         if (!nearedge[d]) continue;
@@ -444,8 +452,7 @@ static void update_edge_warnings(void) {
         }
         if (hit) mask |= (u8)(1 << d);
     }
-    if (!((game.frame >> 3) & 1)) mask = 0;     /* blink ~133ms */
-    render_edge_warn(mask);
+    render_edge_warn(mask);   /* (blink-off already returned above) */
 }
 
 /* Gem glitter: every ~150ms advance a phase; each undamaged gem on the current
@@ -957,7 +964,7 @@ void game_update(void) {
 
     update_marker_anims();   /* spawn-point glow + extra-life pickup animation */
     update_edge_warnings();  /* flash a strip if enemies lurk in an adjacent section */
-    update_glitter();        /* gem shimmer (now bounded: only sparkling gems redraw) */
+    update_glitter();        /* gem shimmer (bounded: only sparkling gems redraw) */
 
     /* animate the open exit: cycle the 4 portal frames while it's active and on
      * the current section (the original loops the portal sprite when open). */
@@ -1007,4 +1014,5 @@ void game_update(void) {
     if (render_hud())             /* HUD lives in BG1 rows 0-1; redrawn only on change */
         game_map_dirty = 1;       /* upload the BG1 map when the HUD changed */
     render_minimap();             /* monochrome section minimap (top-right of the bar) */
+
 }

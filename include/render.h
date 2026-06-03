@@ -103,6 +103,7 @@ void render_clear_cell(u8 gx, u8 gy); /* blank a grid cell's BG entries (tile is
 void render_fall(u8 slot, u8 type, u16 px, u16 py, u8 dmg); /* draw a falling tile OBJ (gem shows its damage frame) */
 void render_falls_hide(void);       /* hide all falling-tile OBJ slots                         */
 void render_flush_map(void);        /* DMA the RAM tilemap to VRAM (call in vblank)            */
+void render_vblank(void);           /* NMI/vblank hook (nmiSet): flush map inside vblank       */
 void render_player(void);      /* place the player sprite from its pixel position     */
 void render_enemies(void);     /* place/hide enemy sprites (active section only)      */
 void render_robot(void);       /* place/hide the robot sprite (active section only)   */

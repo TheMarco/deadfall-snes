@@ -54,6 +54,13 @@ static void enemy_apply_move(Enemy *e, s8 dx, s8 dy) {
     e->target_y = (u8)(e->y + dy);
     e->is_moving = TRUE;
     e->move_timer = (u8)e->move_delay;
+    /* Precompute the per-frame slide step ONCE (8.8 fixed point). The 65816 has
+     * no divide instruction, so doing this here -- not in the per-frame loop --
+     * replaces ~2 software divides/frame with a single add+shift. The delta is
+     * always +-1 tile, so the step easily fits s16. */
+    e->mv_accx = 0; e->mv_accy = 0;
+    e->mv_stepx = (s16)(((s16)(dx * TILE_SIZE) << 8) / (s16)e->move_delay);
+    e->mv_stepy = (s16)(((s16)(dy * TILE_SIZE) << 8) / (s16)e->move_delay);
 }
 
 static void enemy_move_towards_player(Enemy *e, Enemy *all, u8 count) {
@@ -110,11 +117,13 @@ static void enemy_update_movement(Enemy *e) {
         e->target_x = e->x; e->target_y = e->y;
         e->is_moving = FALSE;
     } else {
-        s16 elapsed = (s16)(e->move_delay - e->move_timer);
-        s16 tpx = (s16)((s8)e->target_x * TILE_SIZE);
-        s16 tpy = (s16)((s8)e->target_y * TILE_SIZE);
-        e->pixel_x = (s16)(e->start_pixel_x + (s16)((tpx - e->start_pixel_x) * elapsed) / (s16)e->move_delay);
-        e->pixel_y = (s16)(e->start_pixel_y + (s16)((tpy - e->start_pixel_y) * elapsed) / (s16)e->move_delay);
+        /* Divide-free slide: accumulate the precomputed 8.8 step (no per-frame
+         * multiply/divide). Sub-pixel rounding is <=1px and the snap above lands
+         * the enemy exactly on its cell, so it's visually identical. */
+        e->mv_accx = (s16)(e->mv_accx + e->mv_stepx);
+        e->mv_accy = (s16)(e->mv_accy + e->mv_stepy);
+        e->pixel_x = (s16)(e->start_pixel_x + (e->mv_accx >> 8));
+        e->pixel_y = (s16)(e->start_pixel_y + (e->mv_accy >> 8));
     }
 }
 

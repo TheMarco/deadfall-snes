@@ -61,6 +61,8 @@ typedef struct {
     u8  move_timer;
     u8  target_x, target_y;
     s16 start_pixel_x, start_pixel_y;
+    s16 mv_accx, mv_accy;       /* 8.8 fixed-point slide accumulator     */
+    s16 mv_stepx, mv_stepy;     /* 8.8 per-frame increment (divide-free)  */
     u16 move_delay;             /* frames between moves (level-scaled)   */
     u16 last_move_counter;
 
@@ -88,6 +90,8 @@ typedef struct {
     u8  move_timer;
     u8  target_x, target_y;
     s16 start_pixel_x, start_pixel_y;
+    s16 mv_accx, mv_accy;       /* 8.8 fixed-point slide accumulator     */
+    s16 mv_stepx, mv_stepy;     /* 8.8 per-frame increment (divide-free)  */
     u16 move_delay;
 
     /* zap state machine (frame-countdown timers) */

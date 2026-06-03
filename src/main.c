@@ -98,6 +98,10 @@ int main(void) {
                               * before game_init runs, so a garbage value tinted the title red */
     game_map_dirty = 0;      /* likewise: don't trigger a stale flush during the LogoScene */
     render_logo_reset();     /* clear sparkle/particle pools (WRAM not zeroed at boot) */
+    /* Install the vblank map-upload hook now -- AFTER render_init's heavy setup
+     * DMA and after the dirty flags are cleared, so the NMI can't fire a stray
+     * DMA on top of init or upload a stale map during the logo. */
+    nmiSet(render_vblank);
 
     while (1) {
         /* Edge-detect newly-pressed keys from the CURRENT pad state. We do NOT
@@ -173,10 +177,11 @@ int main(void) {
         }
 
         audio_process();   /* pump the sound engine every frame */
-        WaitForVBlank();
-        render_apply_scroll();   /* write slide scroll in vblank -> no tearing */
-        render_apply_alarm();    /* pulse the red alarm vignette (exit open) in vblank */
-        if (game_map_dirty) { render_flush_map(); game_map_dirty = 0; }
+        WaitForVBlank();   /* the BG-map upload now happens in render_vblank (the NMI hook),
+                            * so game_update isn't delayed by the DMA and the copy can't
+                            * spill into active display. */
+        render_apply_scroll();   /* re-assert scroll after the lib's NMI reset it */
+        render_apply_alarm();    /* pulse the red alarm vignette (exit open) */
     }
     return 0;
 }
