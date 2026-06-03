@@ -198,9 +198,36 @@ def bevel(img, hi=42, lo=56):
     return Image.fromarray(a, "RGBA")
 
 
-def gameplay_tiles(gem_sheet="gem-1.png", iron_col=0, block_tint=None):
-    """The 16 gameplay metatiles as 16x16 RGBA images (index 0 = transparent)."""
-    block = load("block.png");  gem = load(gem_sheet);  iron = load("iron-sprite.png")
+# Per-level gem hue (degrees) -- one grayscale gem (gem-fixed.png) recoloured per
+# level to a vivid colour that COMPLEMENTS each level's background (bg hues, in deg:
+# L1~332 L2~204 L3 gray L4~105 L5~254 L6~116 L7~5 L8~9 L9~28 L10~1).
+GEM_HUES = [165, 35, 275, 315, 70, 15, 195, 300, 225, 130]
+
+
+def colorize_gem(img, hue_deg):
+    """Map the GRAYSCALE gem (gem-fixed.png) to a coloured gem: fixed hue, saturation
+    that eases off toward highlights (so they read bright/near-white like a real gem),
+    value from the source luminance. Alpha preserved."""
+    import colorsys
+    a = np.array(img.convert("RGBA"))
+    out = a.copy()
+    h = (hue_deg % 360) / 360.0
+    for y in range(a.shape[0]):
+        for x in range(a.shape[1]):
+            if a[y, x, 3] < 128:
+                continue
+            g = float(a[y, x, :3].mean()) / 255.0
+            s = 0.95 * (1.0 - g * g * 0.85)       # highlights desaturate toward white
+            v = 0.07 + 0.93 * g                    # keep the gem's full contrast (deep shadows)
+            r, gg, b = colorsys.hsv_to_rgb(h, s, v)
+            out[y, x, 0] = int(r * 255); out[y, x, 1] = int(gg * 255); out[y, x, 2] = int(b * 255)
+    return Image.fromarray(out, "RGBA")
+
+
+def gameplay_tiles(gem_img, iron_col=0, block_tint=None):
+    """The 16 gameplay metatiles as 16x16 RGBA images (index 0 = transparent).
+    gem_img = an already-loaded (and colourised) gem sheet."""
+    block = load("block.png");  gem = gem_img;  iron = load("iron-sprite.png")
     if block_tint is not None:
         block = apply_tint(block, block_tint)
     portal = load("portal.png"); spawn = load("spawn-point.png")
@@ -295,7 +322,9 @@ def build_bg_tiles(level=1, out_base=None):
     marker tiles (pal1) are identical across levels. Default out_base = bg_tiles_<level>."""
     if out_base is None:
         out_base = "bg_tiles_%d" % level
-    tiles = gameplay_tiles("gem-%d.png" % level, iron_col=level - 1,
+    gem_img = colorize_gem(Image.open(os.path.join(PROJ, "gem-fixed.png")).convert("RGBA"),
+                           GEM_HUES[level - 1])
+    tiles = gameplay_tiles(gem_img, iron_col=level - 1,
                            block_tint=BLOCK_TINTS[level - 1])
     tiles[0] = Image.new("RGBA", (16, 16), (0, 0, 0, 0))   # ensure empty stays transparent
     g0, pal0 = build_pal0(tiles)
@@ -432,12 +461,18 @@ def main():
     print(">> HUD glyph font (4bpp, ASCII 32-95)")
     build_obj(make_hud_font(), "hud_font")
 
-    print(">> falling-tile OBJ (gem/boulder/extra-life idle, for smooth gravity)")
-    falls = Image.new("RGBA", (48, 16), (0, 0, 0, 0))
-    falls.paste(frame(load("gem-1.png"), 0, 0), (0, 0))
-    falls.paste(frame(load("iron-sprite.png"), 0, 0), (16, 0))
-    falls.paste(frame(load("extralife.png"), 0, 0), (32, 0))
-    build_obj(falls, "spr_falls", do_boost=True)
+    print(">> falling-tile OBJ per level (gem damage 0/1/2 + boulder + extra-life)")
+    iron = load("iron-sprite.png"); elife = load("extralife.png")
+    gemsrc = Image.open(os.path.join(PROJ, "gem-fixed.png")).convert("RGBA")
+    for lvl in range(1, 11):
+        gem = colorize_gem(gemsrc, GEM_HUES[lvl - 1])
+        falls = Image.new("RGBA", (80, 16), (0, 0, 0, 0))
+        falls.paste(frame(gem, 0, 0), (0, 0))                 # gem damage 0 (intact)
+        falls.paste(frame(gem, 1, 0), (16, 0))                # gem damage 1 (cracked)
+        falls.paste(frame(gem, 2, 0), (32, 0))                # gem damage 2 (more cracked)
+        falls.paste(frame(iron, lvl - 1, 0), (48, 0))         # boulder (per-level frame, like BG)
+        falls.paste(frame(elife, 0, 0), (64, 0))
+        build_obj(falls, "spr_falls_%d" % lvl, do_boost=True)
 
     print("done.")
     return 0

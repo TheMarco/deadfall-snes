@@ -39,9 +39,9 @@
 #define OBJN_ZAPV     288
 #define OBJN_PDEATH   352
 #define OBJN_EDEATH   384
-#define OBJN_GEM_FALL     416   /* (VRAM_OBJ_FALLS-VRAM_OBJ_TILES)/16; sheet frame 0 */
-#define OBJN_BOULDER_FALL 418   /* sheet frame 1 (fc*2) */
-#define OBJN_ELIFE_FALL   420   /* sheet frame 2 */
+#define OBJN_GEM_FALL     416   /* gem damage 0 (intact); +2 per damage level: dmg1=418, dmg2=420 */
+#define OBJN_BOULDER_FALL 422   /* sheet frame 3 (fc*2) */
+#define OBJN_ELIFE_FALL   424   /* sheet frame 4 */
 #define OBJN_MINIMAP      448   /* (0x7C00-0x6000)/16; 16x16 = tiles 448,449,464,465 */
 #define OBJPAL_PLAYER 0
 #define OBJPAL_ENEMY  1
@@ -100,7 +100,7 @@ void render_slide_end(void);        /* back to single-screen, scroll 0 */
 void render_set_cell(u8 gx, u8 gy); /* update just one grid cell's 4 BG entries (cheap)       */
 void render_crush_cell(u8 gx, u8 gy, u8 mt); /* draw an explicit metatile (shatter frame) at a cell */
 void render_clear_cell(u8 gx, u8 gy); /* blank a grid cell's BG entries (tile is in-flight as OBJ) */
-void render_fall(u8 slot, u8 type, u16 px, u16 py); /* draw a falling tile OBJ at screen pixel */
+void render_fall(u8 slot, u8 type, u16 px, u16 py, u8 dmg); /* draw a falling tile OBJ (gem shows its damage frame) */
 void render_falls_hide(void);       /* hide all falling-tile OBJ slots                         */
 void render_flush_map(void);        /* DMA the RAM tilemap to VRAM (call in vblank)            */
 void render_player(void);      /* place the player sprite from its pixel position     */

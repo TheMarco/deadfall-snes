@@ -29,7 +29,16 @@ extern char spr_zap_h_pic, spr_zap_h_picend, spr_zap_h_pal;
 extern char spr_zap_v_pic, spr_zap_v_picend, spr_zap_v_pal;
 extern char spr_pdeath_pic, spr_pdeath_picend, spr_pdeath_pal;
 extern char spr_edeath_pic, spr_edeath_picend, spr_edeath_pal;
-extern char spr_falls_pic, spr_falls_picend, spr_falls_pal;  /* falling gem/boulder/1-up */
+extern char spr_falls_1_pic, spr_falls_1_picend, spr_falls_1_pal;   /* per-level falling gem/boulder/1-up */
+extern char spr_falls_2_pic, spr_falls_2_picend, spr_falls_2_pal;
+extern char spr_falls_3_pic, spr_falls_3_picend, spr_falls_3_pal;
+extern char spr_falls_4_pic, spr_falls_4_picend, spr_falls_4_pal;
+extern char spr_falls_5_pic, spr_falls_5_picend, spr_falls_5_pal;
+extern char spr_falls_6_pic, spr_falls_6_picend, spr_falls_6_pal;
+extern char spr_falls_7_pic, spr_falls_7_picend, spr_falls_7_pal;
+extern char spr_falls_8_pic, spr_falls_8_picend, spr_falls_8_pal;
+extern char spr_falls_9_pic, spr_falls_9_picend, spr_falls_9_pal;
+extern char spr_falls_10_pic, spr_falls_10_picend, spr_falls_10_pal;
 extern char hud_font_pic, hud_font_picend, hud_font_pal;
 extern char hud_font2_pic, hud_font2_picend;   /* 2bpp font for BG3 text layer */
 extern char hud_font2_pal;                     /* BG3 sub-palette: white text on black */
@@ -50,6 +59,15 @@ extern char bgtex_9_pic, bgtex_9_picend, bgtex_9_map, bgtex_9_pal;
 extern char bgtex_10_pic, bgtex_10_picend, bgtex_10_map, bgtex_10_pal;
 extern char title_pic, title_picend, title_map, title_pal;   /* title-screen BG2 image */
 extern char logo_pic, logo_picend, logo_map, logo_pal;       /* boot studio-logo BG2 image (512-tall) */
+extern char kitty_1_pic, kitty_1_picend, kitty_1_map, kitty_1_pal;   /* level-complete kitties 1-9 */
+extern char kitty_2_pic, kitty_2_picend, kitty_2_map, kitty_2_pal;
+extern char kitty_3_pic, kitty_3_picend, kitty_3_map, kitty_3_pal;
+extern char kitty_4_pic, kitty_4_picend, kitty_4_map, kitty_4_pal;
+extern char kitty_5_pic, kitty_5_picend, kitty_5_map, kitty_5_pal;
+extern char kitty_6_pic, kitty_6_picend, kitty_6_map, kitty_6_pal;
+extern char kitty_7_pic, kitty_7_picend, kitty_7_map, kitty_7_pal;
+extern char kitty_8_pic, kitty_8_picend, kitty_8_map, kitty_8_pal;
+extern char kitty_9_pic, kitty_9_picend, kitty_9_map, kitty_9_pal;
 #define LOGO_CANVAS_Y 200  /* BG2 canvas Y of the logo top (must match build_logo.py LOGO_Y) */
 #define BGTEX_W 32   /* texture width in tiles  */
 #define BGTEX_H 32   /* texture height in tiles (256x256 -> fills the 32-tile map exactly) */
@@ -442,6 +460,22 @@ void render_load_gameplay_tiles(u8 level) {
     dmaCopyVram(pic, VRAM_BG1_TILES, (u16)(picend - pic));
     setPalette(pal, 0, 16 * 2);            /* pal0 -> CGRAM 0-15  */
     setPalette(pal + 32, 16, 16 * 2);      /* pal1 -> CGRAM 16-31 (markers intact; minimap is an OBJ now) */
+
+    /* per-level falling-tile OBJ so the falling gem matches the level's gem colour */
+    switch (level) {
+        case 2:  pic=(u8*)&spr_falls_2_pic;  picend=(u8*)&spr_falls_2_picend;  pal=(u8*)&spr_falls_2_pal;  break;
+        case 3:  pic=(u8*)&spr_falls_3_pic;  picend=(u8*)&spr_falls_3_picend;  pal=(u8*)&spr_falls_3_pal;  break;
+        case 4:  pic=(u8*)&spr_falls_4_pic;  picend=(u8*)&spr_falls_4_picend;  pal=(u8*)&spr_falls_4_pal;  break;
+        case 5:  pic=(u8*)&spr_falls_5_pic;  picend=(u8*)&spr_falls_5_picend;  pal=(u8*)&spr_falls_5_pal;  break;
+        case 6:  pic=(u8*)&spr_falls_6_pic;  picend=(u8*)&spr_falls_6_picend;  pal=(u8*)&spr_falls_6_pal;  break;
+        case 7:  pic=(u8*)&spr_falls_7_pic;  picend=(u8*)&spr_falls_7_picend;  pal=(u8*)&spr_falls_7_pal;  break;
+        case 8:  pic=(u8*)&spr_falls_8_pic;  picend=(u8*)&spr_falls_8_picend;  pal=(u8*)&spr_falls_8_pal;  break;
+        case 9:  pic=(u8*)&spr_falls_9_pic;  picend=(u8*)&spr_falls_9_picend;  pal=(u8*)&spr_falls_9_pal;  break;
+        case 10: pic=(u8*)&spr_falls_10_pic; picend=(u8*)&spr_falls_10_picend; pal=(u8*)&spr_falls_10_pal; break;
+        default: pic=(u8*)&spr_falls_1_pic;  picend=(u8*)&spr_falls_1_picend;  pal=(u8*)&spr_falls_1_pal;  break;
+    }
+    dmaCopyVram(pic, VRAM_OBJ_FALLS, (u16)(picend - pic));
+    setPalette(pal, 128 + OBJPAL_FALLS * 16, 16 * 2);
 }
 
 /* Fill the WHOLE BG2 map with the seamless texture tiled. Must cover all 32
@@ -692,8 +726,8 @@ void render_init(void) {
     setPalette((u8 *)&spr_pdeath_pal, 128 + OBJPAL_PDEATH * 16, 16 * 2);
     dmaCopyVram((u8 *)&spr_edeath_pic, VRAM_OBJ_EDEATH, (u16)(&spr_edeath_picend - &spr_edeath_pic));
     setPalette((u8 *)&spr_edeath_pal, 128 + OBJPAL_EDEATH * 16, 16 * 2);
-    dmaCopyVram((u8 *)&spr_falls_pic, VRAM_OBJ_FALLS, (u16)(&spr_falls_picend - &spr_falls_pic));
-    setPalette((u8 *)&spr_falls_pal, 128 + OBJPAL_FALLS * 16, 16 * 2);
+    dmaCopyVram((u8 *)&spr_falls_1_pic, VRAM_OBJ_FALLS, (u16)(&spr_falls_1_picend - &spr_falls_1_pic));
+    setPalette((u8 *)&spr_falls_1_pal, 128 + OBJPAL_FALLS * 16, 16 * 2);  /* swapped per level below */
     bgSetMapPtr(0, VRAM_BG1_MAP, SC_32x32);
 
     /* BG2 = per-level shared background (behind the playfield). Load level 1's
@@ -772,9 +806,10 @@ void render_player(void) {
 }
 
 /* Draw one falling gem/boulder/extra-life as a 16x16 OBJ at screen pixel (px,py). */
-void render_fall(u8 slot, u8 type, u16 px, u16 py) {
+void render_fall(u8 slot, u8 type, u16 px, u16 py, u8 dmg) {
     u16 name = (type == TILE_BOULDER)    ? OBJN_BOULDER_FALL :
-               (type == TILE_EXTRA_LIFE) ? OBJN_ELIFE_FALL   : OBJN_GEM_FALL;
+               (type == TILE_EXTRA_LIFE) ? OBJN_ELIFE_FALL   :
+               (u16)(OBJN_GEM_FALL + (dmg > 2 ? 2 : dmg) * 2);   /* gem: show its damage frame */
     u16 id = (u16)((OAM_FALL_BASE + slot) * 4);   /* oam id is sprite*4 (byte offset) */
     oamSet(id, px, py, 3, 0, 0, name, OBJPAL_FALLS);
     oamSetEx(id, OBJ_SMALL, OBJ_SHOW);
@@ -1027,15 +1062,51 @@ void render_num(u8 x, u8 y, u32 val, u8 digits) {
 
 /* Level-complete stats banner: an opaque dark BG3 fill below the HUD with the
  * level number, time bonus, and per-level stats (port of showLevelComplete). */
+/* Level-complete screen (port of showLevelComplete): a clean dark screen with the
+ * per-level 'level-up kitty' (BG2 image) centred up top and LEVEL N COMPLETE + stats
+ * (BG3) below. Replaces the old BG3-only banner that left the playfield showing. */
+static char *const kitty_pic_tbl[9] = {
+    &kitty_1_pic, &kitty_2_pic, &kitty_3_pic, &kitty_4_pic, &kitty_5_pic,
+    &kitty_6_pic, &kitty_7_pic, &kitty_8_pic, &kitty_9_pic };
+static char *const kitty_end_tbl[9] = {
+    &kitty_1_picend, &kitty_2_picend, &kitty_3_picend, &kitty_4_picend, &kitty_5_picend,
+    &kitty_6_picend, &kitty_7_picend, &kitty_8_picend, &kitty_9_picend };
+static char *const kitty_map_tbl[9] = {
+    &kitty_1_map, &kitty_2_map, &kitty_3_map, &kitty_4_map, &kitty_5_map,
+    &kitty_6_map, &kitty_7_map, &kitty_8_map, &kitty_9_map };
+static char *const kitty_pal_tbl[9] = {
+    &kitty_1_pal, &kitty_2_pal, &kitty_3_pal, &kitty_4_pal, &kitty_5_pal,
+    &kitty_6_pal, &kitty_7_pal, &kitty_8_pal, &kitty_9_pal };
+
 void render_lc_banner(void) {
+    u8  k = (u8)((game.current_level >= 1 && game.current_level <= 9)
+                 ? game.current_level - 1 : 8);
+    u16 *src = (u16 *)kitty_map_tbl[k];
     u16 i;
-    u16 blk = (u16)((BG3_TEXT_PAL << 10) | 0x2000);     /* opaque black, high prio */
-    for (i = 2 * 32; i < 32 * 32; i++) bg3map[i] = blk; /* dark backing (keep HUD rows 0-1) */
-    hud_puts(9, 8, "LEVEL");      hud_putnum(15, 8, game.current_level, 2);
-    hud_puts(18, 8, "COMPLETE");
-    hud_puts(9, 12, "TIME BONUS"); hud_putnum(21, 12, game.time_bonus, 4);
-    hud_puts(9, 14, "BLOCKS");     hud_putnum(21, 14, game.blocks_crushed, 3);
-    hud_puts(9, 16, "ENEMIES");    hud_putnum(21, 16, game.enemies_killed, 3);
+    setScreenOff();
+    render_hide_sprites();
+    /* kitty image -> BG2 */
+    dmaCopyVram((u8 *)kitty_pic_tbl[k], VRAM_BG2_TILES,
+                (u16)(kitty_end_tbl[k] - kitty_pic_tbl[k]));
+    bgSetGfxPtr(1, VRAM_BG2_TILES);
+    setPalette((u8 *)kitty_pal_tbl[k], BG2_PAL * 16, 96 * 2);
+    bgSetMapPtr(1, VRAM_BG2_MAP, SC_32x32);
+    for (i = 0; i < 32 * 32; i++) bg2map[i] = src[i];
+    dmaCopyVram((u8 *)bg2map, VRAM_BG2_MAP, 0x800);
+    /* BG1 cleared (transparent), BG3 -> black backing + the text; minimap hidden */
+    render_clear_screen();
+    bgSetMapPtr(0, VRAM_BG1_MAP, SC_32x32);
+    hud_puts(9, 9, "LEVEL");      hud_putnum(15, 9, game.current_level, 2);
+    hud_puts(18, 9, "COMPLETE");
+    hud_puts(9, 13, "TIME BONUS"); hud_putnum(21, 13, game.time_bonus, 4);
+    hud_puts(9, 15, "BLOCKS");     hud_putnum(21, 15, game.blocks_crushed, 3);
+    hud_puts(9, 17, "ENEMIES");    hud_putnum(21, 17, game.enemies_killed, 3);
+    render_flush_map();
+    bg2_cur_x = 0; bg2_cur_y = 0;
+    scr_bg1x = 0; scr_bg1y = 0; scr_bg2x = 0; scr_bg2y = 0; scroll_dirty = 0;
+    bgSetScroll(0, 0, 0);
+    bgSetScroll(1, 0, 0);
+    setScreenOn();
 }
 
 void render_hide_sprites(void) {

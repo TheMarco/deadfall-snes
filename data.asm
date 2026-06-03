@@ -57,6 +57,49 @@ logo_map: .incbin "res/logo.map"
 logo_pal: .incbin "res/logo.pal"
 .ends
 
+; ---- Level-complete 'level-up kitty' BG2 images, one per level 1-9. ----
+.section ".rodata_kitty" superfree
+kitty_1_pic: .incbin "res/kitty_1.pic"
+kitty_1_picend:
+kitty_1_map: .incbin "res/kitty_1.map"
+kitty_1_pal: .incbin "res/kitty_1.pal"
+kitty_2_pic: .incbin "res/kitty_2.pic"
+kitty_2_picend:
+kitty_2_map: .incbin "res/kitty_2.map"
+kitty_2_pal: .incbin "res/kitty_2.pal"
+kitty_3_pic: .incbin "res/kitty_3.pic"
+kitty_3_picend:
+kitty_3_map: .incbin "res/kitty_3.map"
+kitty_3_pal: .incbin "res/kitty_3.pal"
+kitty_4_pic: .incbin "res/kitty_4.pic"
+kitty_4_picend:
+kitty_4_map: .incbin "res/kitty_4.map"
+kitty_4_pal: .incbin "res/kitty_4.pal"
+kitty_5_pic: .incbin "res/kitty_5.pic"
+kitty_5_picend:
+kitty_5_map: .incbin "res/kitty_5.map"
+kitty_5_pal: .incbin "res/kitty_5.pal"
+.ends
+
+.section ".rodata_kitty2" superfree
+kitty_6_pic: .incbin "res/kitty_6.pic"
+kitty_6_picend:
+kitty_6_map: .incbin "res/kitty_6.map"
+kitty_6_pal: .incbin "res/kitty_6.pal"
+kitty_7_pic: .incbin "res/kitty_7.pic"
+kitty_7_picend:
+kitty_7_map: .incbin "res/kitty_7.map"
+kitty_7_pal: .incbin "res/kitty_7.pal"
+kitty_8_pic: .incbin "res/kitty_8.pic"
+kitty_8_picend:
+kitty_8_map: .incbin "res/kitty_8.map"
+kitty_8_pal: .incbin "res/kitty_8.pal"
+kitty_9_pic: .incbin "res/kitty_9.pic"
+kitty_9_picend:
+kitty_9_map: .incbin "res/kitty_9.map"
+kitty_9_pal: .incbin "res/kitty_9.pal"
+.ends
+
 ; ---- HUD glyph font (4bpp 8x8, ASCII 32-95) + palette ----
 .section ".rodata_hudfont" superfree
 hud_font_pic:  .incbin "res/hud_font.pic"
@@ -220,9 +263,36 @@ spr_edeath_picend:
 spr_edeath_pal:  .incbin "res/spr_edeath.pal"
 .ends
 
-; ---- Falling-tile OBJ (gem/boulder/extra-life idle, 16x16) for smooth gravity ----
+; ---- Falling-tile OBJ per level (level-coloured gem + boulder + extra-life, 16x16) ----
 .section ".rodata_falls" superfree
-spr_falls_pic:  .incbin "res/spr_falls.pic"
-spr_falls_picend:
-spr_falls_pal:  .incbin "res/spr_falls.pal"
+spr_falls_1_pic:  .incbin "res/spr_falls_1.pic"
+spr_falls_1_picend:
+spr_falls_1_pal:  .incbin "res/spr_falls_1.pal"
+spr_falls_2_pic:  .incbin "res/spr_falls_2.pic"
+spr_falls_2_picend:
+spr_falls_2_pal:  .incbin "res/spr_falls_2.pal"
+spr_falls_3_pic:  .incbin "res/spr_falls_3.pic"
+spr_falls_3_picend:
+spr_falls_3_pal:  .incbin "res/spr_falls_3.pal"
+spr_falls_4_pic:  .incbin "res/spr_falls_4.pic"
+spr_falls_4_picend:
+spr_falls_4_pal:  .incbin "res/spr_falls_4.pal"
+spr_falls_5_pic:  .incbin "res/spr_falls_5.pic"
+spr_falls_5_picend:
+spr_falls_5_pal:  .incbin "res/spr_falls_5.pal"
+spr_falls_6_pic:  .incbin "res/spr_falls_6.pic"
+spr_falls_6_picend:
+spr_falls_6_pal:  .incbin "res/spr_falls_6.pal"
+spr_falls_7_pic:  .incbin "res/spr_falls_7.pic"
+spr_falls_7_picend:
+spr_falls_7_pal:  .incbin "res/spr_falls_7.pal"
+spr_falls_8_pic:  .incbin "res/spr_falls_8.pic"
+spr_falls_8_picend:
+spr_falls_8_pal:  .incbin "res/spr_falls_8.pal"
+spr_falls_9_pic:  .incbin "res/spr_falls_9.pic"
+spr_falls_9_picend:
+spr_falls_9_pal:  .incbin "res/spr_falls_9.pal"
+spr_falls_10_pic:  .incbin "res/spr_falls_10.pic"
+spr_falls_10_picend:
+spr_falls_10_pal:  .incbin "res/spr_falls_10.pal"
 .ends

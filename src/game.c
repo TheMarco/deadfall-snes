@@ -28,7 +28,7 @@ static void check_section_cleared(void);            /* fwd; flashes "SECTION CLE
  * Gravity settles the grid instantly (logic), but each tile that moved slides
  * down as a 16x16 OBJ from its origin to its landing cell. The landing cell is
  * blanked on BG1 during the slide and redrawn when the tile arrives. */
-typedef struct { u8 active, type, col, to_y; s16 py, py_end; } FallAnim;
+typedef struct { u8 active, type, col, to_y, dmg; s16 py, py_end; } FallAnim;
 static FallAnim fall_anim[MAX_FALL_ANIMS];
 static u8 fall_anim_n;
 #define FALL_DY 3                /* px/frame (~90ms per cell, near the JS 100ms) */
@@ -59,18 +59,22 @@ static void start_gravity(void) {
     check_falls_crush(0);        /* crush enemies on settle; the player is crushed
                                   * per-frame as the tiles fall, so you can escape */
     fall_anim_n = 0;
+    {
+    u8 cidx = world_section_index(game.cur_row, game.cur_col);  /* gravity carried damage to (to) */
     for (i = 0; i < game.fall_count; i++) {
         FallTile *f = &game.fall_tiles[i];
         render_set_cell(f->from_x, f->from_y);          /* origin is now empty */
         if (fall_anim_n < MAX_FALL_ANIMS) {
             FallAnim *a = &fall_anim[fall_anim_n++];
             a->active = 1; a->type = f->type; a->col = f->to_x; a->to_y = f->to_y;
+            a->dmg = (f->type == TILE_GEM) ? game.damage[cidx][f->to_y][f->to_x] : 0;
             a->py = (s16)(f->from_y * TILE_SIZE);
             a->py_end = (s16)(f->to_y * TILE_SIZE);
             render_clear_cell(f->to_x, f->to_y);        /* hide landed tile until it slides in */
         } else {
             render_set_cell(f->to_x, f->to_y);          /* overflow: no anim, draw final now */
         }
+    }
     }
     if (game.fall_count) audio_sfx(SFX_FALL);
     game.gravity_resolving = (u8)(fall_anim_n > 0);
@@ -468,9 +472,12 @@ static void update_glitter(void) {
             u8 local;
             if (grid[off] != TILE_GEM || dmg[off]) continue;   /* only undamaged gems */
             local = (u8)((glitter_phase + gx * 5 + gy * 3) & (GLITTER_CYCLE - 1));
-            if (local < 4) render_crush_cell(gx, gy, (u8)(MT_GEM_GLITTER + local));
-            else           render_set_cell(gx, gy);
-            drew = 1;
+            /* Only redraw gems whose tile CHANGES this tick: the 4 sparkle frames
+             * (local 0-3) and the one restore-to-normal tick on exit (local 4). Gems
+             * in their long normal phase (local 5+) already show the right tile, so
+             * skip them -- redrawing ALL ~40 every tick is what made glitter a hog. */
+            if (local < 4)       { render_crush_cell(gx, gy, (u8)(MT_GEM_GLITTER + local)); drew = 1; }
+            else if (local == 4) { render_set_cell(gx, gy); drew = 1; }
         }
     if (drew) game_map_dirty = 1;
 }
@@ -950,6 +957,7 @@ void game_update(void) {
 
     update_marker_anims();   /* spawn-point glow + extra-life pickup animation */
     update_edge_warnings();  /* flash a strip if enemies lurk in an adjacent section */
+    update_glitter();        /* gem shimmer (now bounded: only sparkling gems redraw) */
 
     /* animate the open exit: cycle the 4 portal frames while it's active and on
      * the current section (the original loops the portal sprite when open). */
@@ -957,7 +965,9 @@ void game_update(void) {
         game.portal_row == game.cur_row && game.portal_col == game.cur_col) {
         if (game.portal_timer) game.portal_timer--;
         if (game.portal_timer == 0) {
-            game.portal_frame = (u8)((game.portal_frame + 1) & 3);
+            /* cycle the ANIMATION frames only (MT_PORTAL0 = idle, shown when closed);
+             * the open exit loops frames 1..3 and never returns to the idle frame. */
+            game.portal_frame = (u8)(game.portal_frame >= 3 ? 1 : game.portal_frame + 1);
             game.portal_timer = PORTAL_ANIM_FRAMES;
             render_crush_cell(game.portal.x, game.portal.y,
                               (u8)(MT_PORTAL0 + game.portal_frame));
@@ -975,8 +985,9 @@ void game_update(void) {
         game.alarm_active = 0;          /* stop the alarm vignette for the banner */
         game.is_level_complete = 1;
         game.lc_timer = LC_BANNER_FRAMES;
-        render_lc_banner();
-        game_map_dirty = 1;
+        render_lc_banner();      /* sets up the whole level-complete screen + flushes */
+        game_map_dirty = 0;      /* don't re-render entities/HUD over it this frame */
+        return;
     }
 
     render_player();
@@ -988,7 +999,7 @@ void game_update(void) {
             if (i < fall_anim_n && fall_anim[i].active)
                 render_fall((u8)i, fall_anim[i].type,
                             (u16)(PLAYFIELD_OFFSET_X + fall_anim[i].col * TILE_SIZE),
-                            (u16)(PLAYFIELD_OFFSET_Y + fall_anim[i].py));
+                            (u16)(PLAYFIELD_OFFSET_Y + fall_anim[i].py), fall_anim[i].dmg);
             else
                 oamSetVisible((u16)((OAM_FALL_BASE + i) * 4), OBJ_HIDE);
         }
