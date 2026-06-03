@@ -1,12 +1,12 @@
 ; Deadfall SNES - ROM data (header + converted graphics).
 .include "hdr.asm"
 
-; ---- BG1 gameplay tilesets, one per level (4bpp, 20 metatiles + 2 palettes
-; ---- each: 16 gameplay + 4 block/gem shatter frames). Per-level gem sprite,
-; ---- boulder frame, and block tint, matching the original. ~2.5KB each -> all
-; ---- 10 fit in one superfree bank (~26KB). render_load_-
-; ---- gameplay_tiles() swaps in the current level's tiles + palettes. ----
-.section ".rodata_bgtiles" superfree
+; ---- BG1 gameplay tilesets, one per level (4bpp, 28 metatiles + 2 palettes
+; ---- each: 16 gameplay + 4 block/gem shatter + spawn/extra-life + 4 gem glitter
+; ---- frames). Per-level gem sprite, boulder frame, block tint. ~3.5KB each, so
+; ---- they're SPLIT across two superfree banks (5 levels each, ~18KB) -- one bank
+; ---- can't hold all 10. render_load_gameplay_tiles() swaps in the current level. ----
+.section ".rodata_bgtiles1" superfree
 bg_tiles_1_pic:  .incbin "res/bg_tiles_1.pic"
 bg_tiles_1_picend:
 bg_tiles_1_pal:  .incbin "res/bg_tiles_1.pal"
@@ -22,6 +22,8 @@ bg_tiles_4_pal:  .incbin "res/bg_tiles_4.pal"
 bg_tiles_5_pic:  .incbin "res/bg_tiles_5.pic"
 bg_tiles_5_picend:
 bg_tiles_5_pal:  .incbin "res/bg_tiles_5.pal"
+.ends
+.section ".rodata_bgtiles2" superfree
 bg_tiles_6_pic:  .incbin "res/bg_tiles_6.pic"
 bg_tiles_6_picend:
 bg_tiles_6_pal:  .incbin "res/bg_tiles_6.pal"
@@ -45,6 +47,14 @@ title_pic: .incbin "res/title.pic"
 title_picend:
 title_map: .incbin "res/title.map"
 title_pal: .incbin "res/title.pal"
+.ends
+
+; ---- Boot studio-logo BG2 image (gamestudios, centred). ~3KB pic. ----
+.section ".rodata_logo" superfree
+logo_pic: .incbin "res/logo.pic"
+logo_picend:
+logo_map: .incbin "res/logo.map"
+logo_pal: .incbin "res/logo.pal"
 .ends
 
 ; ---- HUD glyph font (4bpp 8x8, ASCII 32-95) + palette ----

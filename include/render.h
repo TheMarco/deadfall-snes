@@ -27,6 +27,9 @@
 #define VRAM_OBJ_PDEATH 0x7600   /* player death anim tiles 352..383 (32) */
 #define VRAM_OBJ_EDEATH 0x7800   /* enemy death anim tiles 384..415 (32)  */
 #define VRAM_OBJ_FALLS  0x7A00   /* falling gem/boulder/extra-life 416..447 */
+#define VRAM_OBJ_MINIMAP 0x7C00  /* 4-colour minimap sprite: tiles 448,449,464,465 */
+#define VRAM_OBJ_SPARKLE 0x7C20  /* boot logo sparkle 16x16: tiles 450,451,466,467 (2nd block +0x100) */
+#define OBJN_SPARKLE     450
 
 /* OBJ tile-name bases (16-wide grid) and palette numbers. */
 #define OBJN_PLAYER   0
@@ -39,11 +42,13 @@
 #define OBJN_GEM_FALL     416   /* (VRAM_OBJ_FALLS-VRAM_OBJ_TILES)/16; sheet frame 0 */
 #define OBJN_BOULDER_FALL 418   /* sheet frame 1 (fc*2) */
 #define OBJN_ELIFE_FALL   420   /* sheet frame 2 */
+#define OBJN_MINIMAP      448   /* (0x7C00-0x6000)/16; 16x16 = tiles 448,449,464,465 */
 #define OBJPAL_PLAYER 0
 #define OBJPAL_ENEMY  1
 #define OBJPAL_ROBOT  2
 #define OBJPAL_ZAPH   3
-#define OBJPAL_ZAPV   4
+#define OBJPAL_ZAPV   3      /* shares ZAPH's palette (same lightning art) -> frees pal 4 */
+#define OBJPAL_MINIMAP 4     /* reclaimed: 4-colour minimap (dark/light grey, white, green) */
 #define OBJPAL_PDEATH 5
 #define OBJPAL_EDEATH 6
 #define OBJPAL_FALLS  7
@@ -54,6 +59,7 @@
 #define OAM_ROBOT      6
 #define OAM_ZAP_BASE   7     /* slots 7..9 (up to ROBOT_ZAP_RANGE segments) */
 #define OAM_FALL_BASE  10    /* slots 10..(10+MAX_FALL_ANIMS-1): smooth falling tiles */
+#define OAM_MINIMAP    26    /* the 4-colour minimap sprite (top-right) */
 #define MAX_FALL_ANIMS 16
 
 /* BG1 metatile indices (each = 4 sequential 8x8 tiles). 20 metatiles total. */
@@ -67,7 +73,10 @@
 #define MT_ROBOTSPN    15
 #define MT_BLOCK_CRUSH 16   /* block shatter frames 3,4 (16,17): destruction anim */
 #define MT_GEM_CRUSH   18   /* gem shatter   frames 3,4 (18,19): destruction anim */
-#define NB_METATILES   20
+#define MT_SPAWN2      20   /* spawn-point glow frame 2 (frames 0,1 = MT_SPAWN0,13) */
+#define MT_ELIFE1      21   /* extra-life pickup anim frames 1,2,3 (frame 0 = MT_EXTRALIFE) */
+#define MT_GEM_GLITTER 24   /* gem glitter/sparkle frames 24..27 (gem sheet row 1) */
+#define NB_METATILES   28
 
 void render_init(void);        /* Mode 1, load gfx/palettes, build+show 1st section */
 void render_set_background(void);  /* load the current section's BG2 (caller force-blanked) */
@@ -75,10 +84,17 @@ void render_bg2_reset(void);       /* reset the per-section BG2 phase (level loa
 void render_load_background(void); /* swap BG2 to current section (handles forced blank)     */
 void render_load_gameplay_tiles(u8 level); /* load level's gem/boulder/block tiles+palettes (forced-blank) */
 void render_show_title(void);      /* put the DEADFALL logo image on BG2 (title scene)        */
+void render_show_logo(void);       /* boot LogoScene: studio logo on black (BG2), above-screen */
+void render_logo_pos(s16 screen_y);/* position the logo's top edge at screen row `screen_y`    */
+void render_logo_sparkles(u8 spawn);/* spawn(if!=0)+advance+draw settled-logo twinkle sparkles  */
+void render_logo_burst(s16 cx, s16 cy, u8 n); /* spawn n landing particles from (cx,cy)            */
+void render_logo_particles(void);  /* advance + draw the landing particles (call every logo frame)*/
+void render_logo_reset(void);      /* clear the sparkle + particle pools (call once at boot)      */
 void render_build_map(void);        /* full rebuild from the current section (load/transition) */
 void render_slide_begin(u8 dir, u8 adj_row, u8 adj_col); /* stage adjacent section, go 64-wide */
 void render_slide_scroll(u16 cam);  /* shadow BG1+BG2 scroll during a slide (applied in vblank) */
 void render_apply_scroll(void);     /* write shadowed scroll to PPU regs; call in vblank */
+void render_apply_alarm(void);      /* pulse the red alarm vignette via color math (vblank) */
 void render_slide_player(u16 cam);  /* draw player entering the new section during a slide */
 void render_slide_end(void);        /* back to single-screen, scroll 0 */
 void render_set_cell(u8 gx, u8 gy); /* update just one grid cell's 4 BG entries (cheap)       */
@@ -92,6 +108,10 @@ void render_enemies(void);     /* place/hide enemy sprites (active section only)
 void render_robot(void);       /* place/hide the robot sprite (active section only)   */
 void render_lightning(void);   /* draw/hide the zap beam segments                     */
 u8   render_hud(void);         /* redraw HUD into BG1 rows 1-2 if changed; TRUE if so */
+void render_lc_banner(void);   /* draw the level-complete stats banner on BG3        */
+void render_flash(const char *s);  /* show a centred transient banner (row 13)        */
+void render_flash_clear(void);     /* clear the flash banner cells                    */
+void render_edge_warn(u8 mask);    /* enemy edge-warning strips (bits up/down/left/right) */
 void render_minimap(void);     /* update the monochrome section minimap (top-right)  */
 void render_minimap_reset(void); /* drop minimap cache so it rebuilds (level load)    */
 void render_clear_screen(void);            /* clear the whole BG1 tilemap (text scenes) */

@@ -49,6 +49,8 @@ extern char bgtex_8_pic, bgtex_8_picend, bgtex_8_map, bgtex_8_pal;
 extern char bgtex_9_pic, bgtex_9_picend, bgtex_9_map, bgtex_9_pal;
 extern char bgtex_10_pic, bgtex_10_picend, bgtex_10_map, bgtex_10_pal;
 extern char title_pic, title_picend, title_map, title_pal;   /* title-screen BG2 image */
+extern char logo_pic, logo_picend, logo_map, logo_pal;       /* boot studio-logo BG2 image (512-tall) */
+#define LOGO_CANVAS_Y 200  /* BG2 canvas Y of the logo top (must match build_logo.py LOGO_Y) */
 #define BGTEX_W 32   /* texture width in tiles  */
 #define BGTEX_H 32   /* texture height in tiles (256x256 -> fills the 32-tile map exactly) */
 
@@ -64,31 +66,76 @@ static s16 slide_bg2_dx, slide_bg2_dy;  /* BG2 scroll delta across the slide */
  * interleaved planes, plane0 = the heart shape (index 1 = white), plane1 =
  * ~plane0 so every other pixel is index 2 (black), matching the opaque font. */
 static const u8 hud_life_tile[16] = {
-    0xD8, 0x27,   /* ##.##... */
-    0xF8, 0x07,   /* #####... */
-    0xF8, 0x07,   /* #####... */
-    0xF8, 0x07,   /* #####... */
-    0x70, 0x8F,   /* .###.... */
-    0x20, 0xDF,   /* ..#..... */
+    0x66, 0x99,   /* .##..##. */
+    0xFF, 0x00,   /* ######## */
+    0xFF, 0x00,   /* ######## */
+    0xFF, 0x00,   /* ######## */
+    0x7E, 0x81,   /* .######. */
+    0x3C, 0xC3,   /* ..####.. */
+    0x18, 0xE7,   /* ...##... */
+    0x00, 0xFF    /* ........ */
+};
+/* A colon glyph shifted ~3px right (dots at x3-4) -> used only for the lives ':'
+ * so there's a few px of space between the full-width heart and the colon. */
+#define HUD_COLON_TILE 75
+static const u8 hud_colon_tile[16] = {
+    0x00, 0xFF,   /* ........ */
+    0x18, 0xE7,   /* ...##... */
+    0x18, 0xE7,   /* ...##... */
+    0x00, 0xFF,   /* ........ */
+    0x18, 0xE7,   /* ...##... */
+    0x18, 0xE7,   /* ...##... */
     0x00, 0xFF,   /* ........ */
     0x00, 0xFF    /* ........ */
 };
 
-/* ---- HUD minimap (monochrome, top-right of the bar) ----
- * A world_cols x world_rows grid of section squares on BG3, white-on-black to
- * match the HUD font: current section = hollow ring ("you are here"); a section
- * that still holds gems = solid square; the exit section while the alarm is up =
- * blinking solid; empty / out-of-world = blank. The 2x2 tiles (VRAM 65..68) are
- * rebuilt on change and DMA'd in vblank (render_flush_map). */
-#define MM_TILE0  (HUD_ICON_LIFE + 1)   /* BG3 tiles 65..68 */
-#define MM_COL    30                     /* bg3map column of the 2-wide minimap */
-#define MM_CELL   4                      /* px pitch per section (3x3 square + 1 gap) */
-/* CGRAM 19 (BG3 sub-pal 4 index3) reclaimed as the minimap grey (#888888 BGR555). */
-static const u8 mm_grey_cgram[2] = { 0x31, 0x46 };
-static u8  mm_tiles[64];                 /* 4 tiles x 16 bytes; built here, DMA'd in vblank */
+/* Enemy edge-warning strips (the original draws a red 3px gradient on a threatened
+ * playfield edge; red is palette-blocked here so this is a white 3px strip). Two
+ * 2bpp tiles: a TOP strip (white rows 0-2) used for up/down (V-flip = down) and a
+ * LEFT strip (white cols 0-2) for left/right (H-flip = right). */
+static const u8 edge_top_tile[16]  = { 0xFF,0,0xFF,0,0xFF,0, 0,0, 0,0, 0,0, 0,0, 0,0 };
+static const u8 edge_left_tile[16] = { 0xE0,0,0xE0,0,0xE0,0,0xE0,0,0xE0,0,0xE0,0,0xE0,0,0xE0,0 };
+#define EDGE_TILE_TOP   73     /* past the 8-tile (4x2) minimap at 65..72 */
+#define EDGE_TILE_LEFT  74
+
+/* HUD bar's lower edge. The BG3 text layer is nudged up 2px (HUD_BG3_VOFS), which
+ * lifts the bar's black off the bottom 2px and would otherwise reveal the BG2
+ * texture there. Fix it on BG3 itself: a high-prio tile on bg3map row 2 -- which
+ * the 2px scroll places at screen y14..21 -- that is BLACK in its top rows and
+ * TRANSPARENT below. The black backs the gap (y14..); the transparent part lets
+ * the playfield (y16+) show. Being on the (non-scrolling) BG3 layer it stays put
+ * during section slides, so no black strip slides with the playfield. 2bpp,
+ * sub-pal 4 index2 = black. Black top 3 rows -> bar bottom at screen y16 (one
+ * line below the minimap); transparent rows 3-7 keep the playfield visible. */
+#define HUD_HALFBAR_TILE 76
+static const u8 hud_halfbar_tile[16] = {
+    0x00,0xFF, 0x00,0xFF, 0x00,0xFF, 0,0, 0,0, 0,0, 0,0, 0,0
+};
+
+/* ---- HUD minimap (4-COLOUR sprite, top-right corner) ----
+ * Drawn as a 16x16 OBJ (not BG3, which is 2bpp = too few colours) so it can show
+ * the original's 4 states: black bg, DARK-GREY out-of-world, LIGHT-GREY has-gems,
+ * WHITE current, GREEN cleared. A 4x4 grid of 3x3 filled cells. Built into a 4bpp
+ * sprite, DMA'd in vblank; OBJ palette 4 freed by sharing the zap palette. */
+#define HUD_BG3_VOFS 2                   /* nudge the whole BG3 (HUD + text) layer up 2px */
+#define MM_COL    30                     /* bg3map cols 30-31 left transparent for the OBJ */
+#define MM_OBJ_X  240                    /* screen x of the 16x16 minimap sprite (top-right) */
+#define MM_OBJ_Y  0
+#define MM_CELL   3                      /* px per section cell (2px dot + 1px gap) */
+#define MM_DOT    2                      /* filled dot size (2x2 = 4px) */
+/* minimap OBJ palette: 0 transp, 1 black(bg/gaps), 2 dark-grey(out-of-world),
+ * 3 light-grey(gems), 4 white(current), 5 green(cleared). BGR555, little-endian. */
+static const u8 mm_obj_pal[32] = {
+    0x00,0x00, 0x00,0x00, 0x08,0x21, 0x94,0x52,
+    0xFF,0x7F, 0x00,0x03, 0x00,0x00, 0x00,0x00,
+    0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00,
+    0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00
+};
+static u8  mm_obj_tiles[128];            /* 4 4bpp tiles (TL,TR,BL,BR); DMA'd in vblank */
+static u8  mm_px[16][16];                /* 16x16 colour-index build buffer */
 static u8  mm_has_gems[MAX_SECTIONS];    /* per-section "gems remain" (round-robin scanned) */
 static u8  mm_scan;                      /* round-robin scan cursor */
-static u16 mm_blink;                     /* exit-blink phase counter */
+static u16 mm_blink;                     /* phase counter */
 static u8  mm_dirty;                     /* tiles changed -> DMA in render_flush_map */
 static u32 mm_sig = 0xFFFFFFFF;          /* last-drawn signature (skip rebuild if same) */
 
@@ -97,6 +144,7 @@ static u16 bg1map[32 * 32];
 static u16 bg2map[32 * 32];
 static u16 bg3map[32 * 32];   /* HUD + scene text (BG3, fixed, high priority) */
 static u16 bg1map2[32 * 32];  /* BG1 screen 1: adjacent section, staged during a slide */
+static u8  edge_last_mask;    /* last drawn enemy edge-warning mask (reset on screen clear) */
 
 /* Slide state. The staging (start) and commit (end) VRAM writes are deferred to
  * render_flush_map (which runs in vblank) so the screen never blanks -> no flash. */
@@ -122,7 +170,10 @@ static const u16 mt_palbits[NB_METATILES] = {
     1 << 10, 1 << 10,             /* spawn x2                    -> pal 1 */
     1 << 10, 1 << 10,            /* extra-life, robot-spawn      -> pal 1 */
     0, 0,                          /* block shatter 3,4          -> pal 0 */
-    0, 0                           /* gem shatter   3,4          -> pal 0 */
+    0, 0,                          /* gem shatter   3,4          -> pal 0 */
+    1 << 10,                       /* spawn glow frame 2         -> pal 1 */
+    1 << 10, 1 << 10, 1 << 10,    /* extra-life anim frames 1-3 -> pal 1 */
+    0, 0, 0, 0                      /* gem glitter frames 24-27   -> pal 0 */
 };
 
 /* Map a tile type (+ damage) to its BG1 metatile index. */
@@ -191,8 +242,9 @@ void render_build_map(void) {
 
 void render_flush_map(void) {
     /* Upload the regenerated minimap glyph tiles (VRAM tiles 65..68) in vblank. */
-    if (mm_dirty) {
-        dmaCopyVram(mm_tiles, (u16)(VRAM_BG3_TILES + MM_TILE0 * 8), 64);
+    if (mm_dirty) {     /* 16x16 OBJ: TL,TR on one tile row, BL,BR on the next (16-wide grid) */
+        dmaCopyVram(mm_obj_tiles,      VRAM_OBJ_MINIMAP,            64);
+        dmaCopyVram(mm_obj_tiles + 64, (u16)(VRAM_OBJ_MINIMAP + 16 * 16), 64);
         mm_dirty = 0;
     }
     /* Slide staging/commit happen here (in vblank) so the screen never blanks. */
@@ -277,10 +329,35 @@ void render_slide_scroll(u16 cam) {
 /* Apply the shadowed scroll to the PPU registers. MUST be called in vblank
  * (right after WaitForVBlank) so the scroll never changes mid-frame. */
 void render_apply_scroll(void) {
+    /* Re-assert the HUD/text layer's 2px upward nudge EVERY vblank. Setting it
+     * once in render_init didn't stick -- the per-frame vblank path runs after
+     * the library's NMI, which leaves BG3's vertical offset back at 0. */
+    bgSetScroll(2, 0, HUD_BG3_VOFS);
     if (!scroll_dirty) return;
     bgSetScroll(0, scr_bg1x, scr_bg1y);
     bgSetScroll(1, scr_bg2x, scr_bg2y);
     scroll_dirty = 0;
+}
+
+/* Alarm vignette: while the exit is open (game.alarm_active), pulse an additive
+ * RED fixed-color over every layer via color math (REG_CGWSEL/CGADSUB/COLDATA),
+ * on a triangle wave. Disables color math cleanly when the alarm ends, so normal
+ * play is untouched. Call in vblank (PPU color regs). Port of the red vignette. */
+void render_apply_alarm(void) {
+    if (!game.alarm_active) {
+        *((vuint8 *)0x2131) = 0x00;     /* CGADSUB off every frame -> no stale red tint */
+        return;
+    }
+    {
+        u8 t   = game.alarm_timer;                                /* 0..2*PULSE-1 */
+        u8 tri = (t < ALARM_PULSE_FRAMES) ? t : (u8)(2 * ALARM_PULSE_FRAMES - t);
+        u8 red = (u8)(2 + tri / 5);                               /* ~2..8 of 31  */
+        *((vuint8 *)0x2130) = 0x00;                 /* CGWSEL: math always, fixed color */
+        *((vuint8 *)0x2132) = 0x80;                 /* COLDATA B = 0 */
+        *((vuint8 *)0x2132) = 0x40;                 /* COLDATA G = 0 */
+        *((vuint8 *)0x2132) = (u8)(0x20 | red);     /* COLDATA R = red */
+        *((vuint8 *)0x2131) = 0x37;                 /* CGADSUB add: BG1|BG2|BG3|OBJ|backdrop */
+    }
 }
 
 /* Draw the player at its new-section entry position relative to the camera. */
@@ -364,11 +441,7 @@ void render_load_gameplay_tiles(u8 level) {
     }
     dmaCopyVram(pic, VRAM_BG1_TILES, (u16)(picend - pic));
     setPalette(pal, 0, 16 * 2);            /* pal0 -> CGRAM 0-15  */
-    setPalette(pal + 32, 16, 16 * 2);      /* pal1 -> CGRAM 16-31 */
-    /* Reclaim CGRAM 19 (a minor ~90px marker accent) as the minimap's GREY so the
-     * minimap can show white(you)/grey(gems) in the same BG3 sub-palette as the
-     * white/black HUD text. Re-applied here because the pal1 load above set it. */
-    setPalette((u8 *)mm_grey_cgram, 19, 2);
+    setPalette(pal + 32, 16, 16 * 2);      /* pal1 -> CGRAM 16-31 (markers intact; minimap is an OBJ now) */
 }
 
 /* Fill the WHOLE BG2 map with the seamless texture tiled. Must cover all 32
@@ -418,6 +491,151 @@ void render_load_background(void) {
 /* Title screen: put the DEADFALL logo image on BG2 (no scroll/parallax). BG1 is
  * left empty (caller cleared it) and BG3 carries "PRESS START". Force-blanked for
  * the tile DMA; the next level load swaps BG2 back to the playfield background. */
+/* Boot LogoScene: the studio logo on a black screen, dropped in via BG2 v-scroll.
+ * Loads the logo onto BG2 (black elsewhere), BG1 empty + BG3 black backing. */
+void render_show_logo(void) {
+    setScreenOff();
+    slide_pending = 0; mm_dirty = 0;   /* WRAM not zeroed at boot -> avoid a stale flush path */
+    render_hide_sprites();
+    dmaCopyVram((u8 *)&logo_pic, VRAM_BG2_TILES, (u16)(&logo_picend - &logo_pic));
+    bgSetGfxPtr(1, VRAM_BG2_TILES);
+    setPalette((u8 *)&logo_pal, BG2_PAL * 16, 96 * 2);    /* CGRAM 32..127 */
+    /* 64-tall map (SC_32x64, 0x800 words at 0x5800..0x6000, just under OBJ tiles) so
+     * the logo hides fully above the screen and drops in without wrapping. */
+    bgSetMapPtr(1, VRAM_BG2_MAP, SC_32x64);
+    dmaCopyVram((u8 *)&logo_map, VRAM_BG2_MAP, 0x1000);
+    render_clear_screen();                                /* BG1 empty, BG3 black, minimap hidden */
+    bgSetMapPtr(0, VRAM_BG1_MAP, SC_32x32);
+    bgSetScroll(0, 0, 0);
+    render_flush_map();                                   /* push BG1(empty)+BG3(black) */
+    bg2_cur_x = 0; bg2_cur_y = 0;
+    /* Start the logo fully above the visible top (screen_y = -48) so boot is a
+     * black screen; the LogoScene then drops it in. Apply now so screen-on never
+     * shows it parked at canvas-Y. */
+    scr_bg1x = 0; scr_bg1y = 0; scr_bg2x = 0;
+    scr_bg2y = (u16)(LOGO_CANVAS_Y + 48);
+    bgSetScroll(0, 0, 0);
+    bgSetScroll(1, 0, scr_bg2y);
+    scroll_dirty = 0;
+    setScreenOn();
+}
+
+/* Position the logo at screen pixel-row `screen_y` (its top edge) via BG2 v-scroll
+ * (the logo sits at BG2 canvas-Y = LOGO_CANVAS_Y). Applied in vblank like all scroll. */
+void render_logo_pos(s16 screen_y) {
+    scr_bg1x = 0; scr_bg1y = 0;
+    scr_bg2x = 0; scr_bg2y = (u16)(s16)(LOGO_CANVAS_Y - screen_y);
+    scroll_dirty = 1;
+}
+
+/* A single white pixel at the centre (8,8) of a 16x16 OBJ (white via minimap pal idx4).
+ * Shared by the settled twinkle and the landing particle burst -- the original uses
+ * 1-2px pixels, not stars. oamSet at (px-8,py-8) puts the pixel at (px,py). */
+static const u8 spark_tiles[128] = {
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x80,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+
+static u8 lp_rng = 0x9D;
+static u8 lp_rand(void) { lp_rng = (u8)(lp_rng * 37 + 17); return lp_rng; }
+
+/* 32 points on the logo's perimeter ellipse (dx,dy from centre 128,112). */
+static const s8 spark_ring[64] = {
+    76,0,75,6,70,11,63,17,54,21,42,25,29,28,15,29,
+    0,30,-15,29,-29,28,-42,25,-54,21,-63,17,-70,11,-75,6,
+    -76,0,-75,-6,-70,-11,-63,-17,-54,-21,-42,-25,-29,-28,-15,-29,
+    0,-30,15,-29,29,-28,42,-25,54,-21,63,-17,70,-11,75,-6
+};
+
+/* Settled-logo sparkles (LogoScene spawnSparkle/updateSparkles): one new sparkle every
+ * ~5 frames at a RANDOM spot -- 40% inside the logo, 60% on its perimeter -- each drifting
+ * and twinkling (fade in then out) over a random ~0.3-0.7s life, then gone. 1px white.
+ * `spawn`!=0 adds one this frame; always advances + draws the live ones. Slots 31..42. */
+#define MAX_SPARK 28
+static struct { s16 x, y, vx, vy; u8 life, maxlife; } lspark[MAX_SPARK];
+
+void render_logo_sparkles(u8 spawn) {                /* spawn = how many to add this frame */
+    u8 i, s;
+    for (s = 0; s < spawn; s++) {
+        for (i = 0; i < MAX_SPARK; i++) if (lspark[i].maxlife == 0) break;
+        if (i >= MAX_SPARK) break;                   /* pool full */
+        {
+            s16 sx, sy;
+            if ((lp_rand() % 5) < 2) {                       /* 40% inside the logo */
+                sx = (s16)(128 + (s16)(lp_rand() % 120) - 60);
+                sy = (s16)(112 + (s16)(lp_rand() % 36) - 18);
+            } else {                                          /* 60% on the perimeter (+jitter) */
+                u8 a = (u8)((lp_rand() & 31) * 2);
+                sx = (s16)(128 + spark_ring[a]     + (s16)(lp_rand() % 9) - 4);
+                sy = (s16)(112 + spark_ring[a + 1] + (s16)(lp_rand() % 9) - 4);
+            }
+            lspark[i].x = (s16)(sx << 8); lspark[i].y = (s16)(sy << 8);
+            lspark[i].vx = (s16)((s16)(lp_rand() % 48) - 24);        /* gentle drift, 8.8/frame */
+            lspark[i].vy = (s16)((s16)(lp_rand() % 48) - 24 - 16);   /* slight upward bias */
+            lspark[i].life = 0;
+            lspark[i].maxlife = (u8)(8 + (lp_rand() % 14));          /* ~0.13-0.36s (snappy twinkle) */
+        }
+    }
+    for (i = 0; i < MAX_SPARK; i++) {
+        u16 slot = (u16)((31 + i) * 4);
+        u16 ml = lspark[i].maxlife, lf;
+        if (!ml) { oamSetVisible(slot, OBJ_HIDE); continue; }
+        lspark[i].x = (s16)(lspark[i].x + lspark[i].vx);
+        lspark[i].y = (s16)(lspark[i].y + lspark[i].vy);
+        lf = ++lspark[i].life;
+        if (lf >= ml) { lspark[i].maxlife = 0; oamSetVisible(slot, OBJ_HIDE); continue; }
+        /* twinkle: alpha fades in over first 30%, out over the rest -> show the bright middle */
+        if (lf * 20 >= ml * 3 && lf * 20 <= ml * 13) {
+            oamSet(slot, (u16)((lspark[i].x >> 8) - 8), (u16)((lspark[i].y >> 8) - 8),
+                   2, 0, 0, (u16)OBJN_SPARKLE, OBJPAL_MINIMAP);
+            oamSetEx(slot, OBJ_SMALL, OBJ_SHOW);
+        } else oamSetVisible(slot, OBJ_HIDE);
+    }
+}
+
+/* Landing particle burst (LogoScene.spawnLandingParticles): white pixels spray up from the
+ * logo's bottom edge on each bounce, arc under gravity, flicker out. 8.8 fixed; slots 7..30. */
+#define MAX_PART 24
+static struct { s16 x, y, vx, vy; u8 life; } lpart[MAX_PART];
+
+void render_logo_burst(s16 cx, s16 cy, u8 n) {
+    u8 i, k;
+    for (k = 0; k < n; k++) {
+        for (i = 0; i < MAX_PART; i++) if (lpart[i].life == 0) break;
+        if (i >= MAX_PART) return;
+        lpart[i].x  = (s16)((cx + (s16)(lp_rand() % 130) - 65) << 8);  /* spread across the width */
+        lpart[i].y  = (s16)(cy << 8);
+        lpart[i].vx = (s16)(((s16)(lp_rand() % 160) - 80));           /* outward, 8.8 */
+        lpart[i].vy = (s16)(-(s16)((lp_rand() % 110) + 40));          /* upward, 8.8 */
+        lpart[i].life = (u8)(22 + (lp_rand() % 18));
+    }
+}
+
+void render_logo_particles(void) {
+    u8 i;
+    for (i = 0; i < MAX_PART; i++) {
+        u16 slot = (u16)((7 + i) * 4);
+        if (lpart[i].life) {
+            lpart[i].vy = (s16)(lpart[i].vy + 13);     /* gravity */
+            lpart[i].x  = (s16)(lpart[i].x + lpart[i].vx);
+            lpart[i].y  = (s16)(lpart[i].y + lpart[i].vy);
+            lpart[i].life--;
+            if (lpart[i].life > 6 || (lpart[i].life & 1)) {   /* flicker out at the end */
+                oamSet(slot, (u16)((lpart[i].x >> 8) - 8), (u16)((lpart[i].y >> 8) - 8),
+                       2, 0, 0, (u16)OBJN_SPARKLE, OBJPAL_MINIMAP);
+                oamSetEx(slot, OBJ_SMALL, OBJ_SHOW);
+            } else oamSetVisible(slot, OBJ_HIDE);
+        } else oamSetVisible(slot, OBJ_HIDE);
+    }
+}
+
+/* Clear both pools (WRAM isn't zeroed at boot -> stale particles would appear). */
+void render_logo_reset(void) {
+    u8 i;
+    for (i = 0; i < MAX_SPARK; i++) lspark[i].maxlife = 0;
+    for (i = 0; i < MAX_PART; i++)  lpart[i].life = 0;
+}
+
 void render_show_title(void) {
     u16 *src = (u16 *)&title_map;
     u16 i;
@@ -464,7 +682,12 @@ void render_init(void) {
     dmaCopyVram((u8 *)&spr_zap_h_pic, VRAM_OBJ_ZAPH, (u16)(&spr_zap_h_picend - &spr_zap_h_pic));
     setPalette((u8 *)&spr_zap_h_pal, 128 + OBJPAL_ZAPH * 16, 16 * 2);
     dmaCopyVram((u8 *)&spr_zap_v_pic, VRAM_OBJ_ZAPV, (u16)(&spr_zap_v_picend - &spr_zap_v_pic));
-    setPalette((u8 *)&spr_zap_v_pal, 128 + OBJPAL_ZAPV * 16, 16 * 2);
+    /* zapv shares ZAPH's palette (OBJPAL_ZAPV == 3), so slot 4 is free: load the
+     * 4-colour minimap palette there. */
+    setPalette((u8 *)mm_obj_pal, 128 + OBJPAL_MINIMAP * 16, 16 * 2);
+    /* boot-logo sparkle star (16x16 OBJ, white via the minimap palette); 2nd tile row +0x100 */
+    dmaCopyVram((u8 *)spark_tiles,      VRAM_OBJ_SPARKLE,            64);
+    dmaCopyVram((u8 *)spark_tiles + 64, (u16)(VRAM_OBJ_SPARKLE + 0x100), 64);
     dmaCopyVram((u8 *)&spr_pdeath_pic, VRAM_OBJ_PDEATH, (u16)(&spr_pdeath_picend - &spr_pdeath_pic));
     setPalette((u8 *)&spr_pdeath_pal, 128 + OBJPAL_PDEATH * 16, 16 * 2);
     dmaCopyVram((u8 *)&spr_edeath_pic, VRAM_OBJ_EDEATH, (u16)(&spr_edeath_picend - &spr_edeath_pic));
@@ -490,9 +713,17 @@ void render_init(void) {
      * (even byte=plane0, odd=plane1); plane1=~plane0 makes the background index2
      * (black) like the rest of the opaque font. */
     dmaCopyVram((u8 *)hud_life_tile, (u16)(VRAM_BG3_TILES + HUD_ICON_LIFE * 8), 16);
+    dmaCopyVram((u8 *)edge_top_tile,  (u16)(VRAM_BG3_TILES + EDGE_TILE_TOP * 8), 16);
+    dmaCopyVram((u8 *)edge_left_tile, (u16)(VRAM_BG3_TILES + EDGE_TILE_LEFT * 8), 16);
+    dmaCopyVram((u8 *)hud_colon_tile, (u16)(VRAM_BG3_TILES + HUD_COLON_TILE * 8), 16);
+    dmaCopyVram((u8 *)hud_halfbar_tile, (u16)(VRAM_BG3_TILES + HUD_HALFBAR_TILE * 8), 16);  /* bar lower edge */
     bgSetGfxPtr(2, VRAM_BG3_TILES);
     bgSetMapPtr(2, VRAM_BG3_MAP, SC_32x32);
-    bgSetScroll(2, 0, 0);
+    /* Nudge the whole BG3 layer (HUD bar + all scene text) up 2px: the font
+     * glyphs are top-aligned in their tile, so on tile-row 1 the text sat at
+     * y8-14 with a dead black row at y15. Scrolling up 2px lifts the text and
+     * trims that extra black strip below the bar. */
+    bgSetScroll(2, 0, HUD_BG3_VOFS);
 
     setMode(BG_MODE1, 0);
     REG_BGMODE = 0x09;       /* mode 1 + BG3 high priority */
@@ -502,10 +733,11 @@ void render_init(void) {
     videoModeSub = 0x00;     /* TS: nothing */
     REG_TM = 0x17;
     *((vuint8 *)0x212D) = 0x00;   /* REG_TS */
+    *((vuint8 *)0x2131) = 0x00;   /* CGADSUB: color math OFF (no stray red tint at boot) */
 
-    render_clear_screen();       /* clear VRAM tilemap while in forced blank */
-    render_flush_map();
-    setScreenOn();
+    /* Boot straight into the LogoScene (studio logo on black) rather than flashing
+     * the level-1 background that render_set_background staged above. */
+    render_show_logo();
 }
 
 void render_player(void) {
@@ -517,7 +749,7 @@ void render_player(void) {
     sy = (u16)(PLAYFIELD_OFFSET_Y + p->pixel_y);
 
     if (game.death_pending) {         /* death animation plays at the death spot */
-        u8 fr = (u8)((DEATH_ANIM_FRAMES * DEATH_ANIM_COUNT - game.death_timer) / DEATH_ANIM_FRAMES);
+        u8 fr = (u8)((DEATH_SEQ_FRAMES - game.death_timer) / DEATH_ANIM_FRAMES);
         if (fr >= DEATH_ANIM_COUNT) fr = (u8)(DEATH_ANIM_COUNT - 1);
         oamSet(0, sx, sy, 3, 0, 0, (u16)(OBJN_PDEATH + fr * 2), OBJPAL_PDEATH);
         oamSetEx(0, OBJ_SMALL, OBJ_SHOW);
@@ -525,7 +757,9 @@ void render_player(void) {
     }
     if (!p->alive) { oamSetVisible(0, OBJ_HIDE); return; }
 
-    switch (p->direction) {           /* sheet columns: L3 R4 U5 D6 */
+    if (p->idle_col != 0xFF) {        /* standing still -> idle look-around cols 0-2 */
+        col = p->idle_col;
+    } else switch (p->direction) {    /* sheet columns: L3 R4 U5 D6 */
         case DIR_LEFT:  col = 3; break;
         case DIR_RIGHT: col = 4; break;
         case DIR_UP:    col = 5; break;
@@ -665,52 +899,49 @@ u8 render_hud(void) {
         u16 blk = (u16)((BG3_TEXT_PAL << 10) | 0x2000);
         bg3map[i] = blk; bg3map[32 + i] = blk;
     }
+    /* Row 2 gets the half-black edge tile: the 2px up-nudge places it at screen
+     * y14.., so its black top backs the gap below the bar while its transparent
+     * lower rows leave the playfield visible. On BG3, so it never slides. */
+    for (i = 0; i < MM_COL; i++)
+        bg3map[64 + i] = (u16)(HUD_HALFBAR_TILE | (BG3_TEXT_PAL << 10) | 0x2000);
 
     /* Single line laid out like the original: SCORE:000000 GEM:c/t [heart]:lives.
      * Drawn on ROW 1 (the lower half of the 16px bar) so the emulator's top
      * overscan can't clip it (row 0 stays blank black padding). */
     hud_puts(1, 1, "SCORE:");  hud_putnum(7, 1, game.score, 6);
-    hud_puts(14, 1, "GEM:");   hud_putnum(18, 1, game.gems_collected, 2);
-    hud_putc(20, 1, '/');      hud_putnum(21, 1, game.total_gems, 2);
+    hud_puts(14, 1, "GEM:");      /* compact c/t -- no padding gaps (the bar is cleared each redraw) */
+    {
+        u8 cx = 18;
+        if (game.gems_collected >= 10) { hud_putnum(cx, 1, game.gems_collected, 2); cx = (u8)(cx + 2); }
+        else                           { hud_putnum(cx, 1, game.gems_collected, 1); cx = (u8)(cx + 1); }
+        hud_putc(cx, 1, '/'); cx = (u8)(cx + 1);
+        if (game.total_gems >= 10) hud_putnum(cx, 1, game.total_gems, 2);
+        else                       hud_putnum(cx, 1, game.total_gems, 1);
+    }
     /* life icon (custom heart glyph, tile 64) + ':' + lives count */
-    bg3map[32 + 24] = (u16)(HUD_ICON_LIFE) | (BG3_TEXT_PAL << 10) | 0x2000;
-    hud_putc(25, 1, ':');      hud_putnum(26, 1, game.lives, 1);
+    bg3map[32 + 24] = (u16)(HUD_ICON_LIFE)   | (BG3_TEXT_PAL << 10) | 0x2000;
+    bg3map[32 + 25] = (u16)(HUD_COLON_TILE)  | (BG3_TEXT_PAL << 10) | 0x2000;  /* spaced colon */
+    hud_putnum(26, 1, game.lives, 1);
     return TRUE;
 }
 
-/* Stamp a 3x3 section square (solid, or a hollow ring) at minimap pixel (sx,sy).
- * sq[] = every opaque square pixel (-> plane0); wh[] = only the WHITE pixels (the
- * current/exit square) so plane1 = ~wh distinguishes white(idx1) from grey(idx3).
- * Each row is a u16, bit (15-x) = pixel x. */
-static void mm_square(u16 *sq, u16 *wh, u8 sx, u8 sy, u8 ring, u8 white) {
-    u8 dx, dy;
-    for (dy = 0; dy < 3; dy++)
-        for (dx = 0; dx < 3; dx++) {
-            u16 bit;
-            if (ring && dx == 1 && dy == 1) continue;   /* hollow centre */
-            bit = (u16)(0x8000 >> (sx + dx));
-            sq[sy + dy] |= bit;
-            if (white) wh[sy + dy] |= bit;
-        }
-}
-
-/* Rebuild the minimap when its state changes; refresh one section's gem flag per
- * call (round-robin) so the per-section scan stays cheap. Called every frame from
- * game_update. Sets mm_dirty (consumed by render_flush_map) + game_map_dirty when
- * the picture actually changed. */
+/* Build the 4-colour minimap into a 16x16 OBJ sprite (4 4bpp tiles) and keep it
+ * shown each frame. Refreshes one section's gem flag per call (round-robin). */
 void render_minimap(void) {
     u8  nsec = (u8)(game.world_rows * game.world_cols);
     u8  cur  = world_section_index(game.cur_row, game.cur_col);
-    u8  por  = world_section_index(game.portal_row, game.portal_col);
-    u8  blink_on = (u8)(game.portal_active && ((mm_blink >> 4) & 1));   /* ~16-frame phase */
-    u16 sq[16], wh[16];     /* sq = any square pixel (plane0); wh = white pixels only */
     u32 sig;
-    u8  r, c, idx, ox, oy, ry, tile, tx, ty;
+    u8  r, c, idx, x, y, tx, ty;
 
     mm_blink++;
 
-    /* round-robin: scan one section's grid for any remaining gem (linear, cheap) */
-    if (nsec) {
+    /* keep the sprite on-screen every frame (so it survives render_hide_sprites) */
+    oamSet((u16)(OAM_MINIMAP * 4), MM_OBJ_X, MM_OBJ_Y, 2, 0, 0,
+           (u16)OBJN_MINIMAP, OBJPAL_MINIMAP);
+    oamSetEx((u16)(OAM_MINIMAP * 4), OBJ_SMALL, OBJ_SHOW);
+
+    /* round-robin gem scan, every 4th frame (cheap) */
+    if (nsec && (mm_blink & 3) == 0) {
         u8 s = (u8)(mm_scan % nsec);
         u8 *g = &game.sections[s][0][0];
         u8 has = 0, k;
@@ -719,58 +950,50 @@ void render_minimap(void) {
         mm_scan = (u8)(s + 1);
     }
 
-    /* signature = gem bitmap + current + portal-blink phase; skip if unchanged */
     sig = 0;
     for (r = 0; r < game.world_rows; r++)
         for (c = 0; c < game.world_cols; c++)
             if (mm_has_gems[world_section_index(r, c)]) sig |= (u32)(1UL << (r * 4 + c));
-    sig = (sig << 8) | ((u32)cur << 2) | ((u32)blink_on << 1) | (game.portal_active ? 1 : 0);
+    sig = (sig << 4) | cur;
     if (sig == mm_sig) return;
     mm_sig = sig;
 
-    /* draw the grid, centred in the 16x16 area (smaller worlds dodge overscan):
-     *   current section = WHITE solid (you are here)
-     *   section with gems left = GREY solid
-     *   cleared in-world section = GREY hollow ring (shows the world layout)
-     *   exit section while the alarm is up = WHITE solid, blinking */
-    for (ry = 0; ry < 16; ry++) { sq[ry] = 0; wh[ry] = 0; }
-    ox = (u8)((16 - game.world_cols * MM_CELL) / 2);
-    oy = (u8)((16 - game.world_rows * MM_CELL) / 2);
-    for (r = 0; r < game.world_rows; r++)
-        for (c = 0; c < game.world_cols; c++) {
-            u8 sx = (u8)(ox + c * MM_CELL), sy = (u8)(oy + r * MM_CELL);
-            idx = world_section_index(r, c);
-            if (game.portal_active && idx == por) {        /* exit: white blink */
-                if (blink_on) mm_square(sq, wh, sx, sy, 0, 1);
-            } else if (idx == cur) {                        /* you are here: white */
-                mm_square(sq, wh, sx, sy, 0, 1);
-            } else if (mm_has_gems[idx]) {                  /* gems remain: grey solid */
-                mm_square(sq, wh, sx, sy, 0, 0);
-            } else {                                         /* cleared: grey ring */
-                mm_square(sq, wh, sx, sy, 1, 0);
+    /* paint the 16x16 index buffer: black bg, then a 3x3 filled cell per section
+     * (dark-grey out-of-world, light-grey has-gems, white current, green cleared). */
+    for (y = 0; y < 16; y++)
+        for (x = 0; x < 16; x++) mm_px[y][x] = 1;        /* black bg / gaps */
+    for (r = 0; r < MAX_WORLD_ROWS; r++)
+        for (c = 0; c < MAX_WORLD_COLS; c++) {
+            u8 col, dx, dy;
+            /* centre the grid; +1 rounds the odd leftover pixel to the TOP so
+             * there's 1px LESS black below the dots than above (was 2 up / 3 down). */
+            u8 off = (u8)((16 - ((MAX_WORLD_COLS - 1) * MM_CELL + MM_DOT) + 1) / 2);
+            u8 sx = (u8)(c * MM_CELL + off), sy = (u8)(r * MM_CELL + off);
+            if (r >= game.world_rows || c >= game.world_cols) {
+                col = 2;                                  /* dark-grey: out of world */
+            } else {
+                idx = world_section_index(r, c);
+                col = (idx == cur) ? 4 : mm_has_gems[idx] ? 3 : 5;  /* white / light-grey / green */
             }
+            for (dy = 0; dy < MM_DOT; dy++)
+                for (dx = 0; dx < MM_DOT; dx++) mm_px[sy + dy][sx + dx] = col;
         }
 
-    /* pack the 16x16 into 4 BG3 tiles (TL,TR,BL,BR): plane0 = square pixels,
-     * plane1 = ~white -> idx1 white, idx3 grey (CGRAM19), idx2 black background. */
+    /* encode the four 8x8 quadrants as 4bpp tiles (TL,TR,BL,BR) */
     for (ty = 0; ty < 2; ty++)
         for (tx = 0; tx < 2; tx++) {
-            tile = (u8)(ty * 2 + tx);
-            for (ry = 0; ry < 8; ry++) {
-                u8 p0 = (u8)((sq[ty * 8 + ry] >> (tx ? 0 : 8)) & 0xFF);
-                u8 p1 = (u8)((wh[ty * 8 + ry] >> (tx ? 0 : 8)) & 0xFF);
-                mm_tiles[tile * 16 + ry * 2]     = p0;
-                mm_tiles[tile * 16 + ry * 2 + 1] = (u8)~p1;
+            u8 *b = &mm_obj_tiles[(ty * 2 + tx) * 32];
+            for (y = 0; y < 8; y++) {
+                u8 p0 = 0, p1 = 0, p2 = 0, p3 = 0;
+                for (x = 0; x < 8; x++) {
+                    u8 v = mm_px[ty * 8 + y][tx * 8 + x], bit = (u8)(7 - x);
+                    p0 |= (u8)((v & 1) << bit);        p1 |= (u8)(((v >> 1) & 1) << bit);
+                    p2 |= (u8)(((v >> 2) & 1) << bit); p3 |= (u8)(((v >> 3) & 1) << bit);
+                }
+                b[y * 2] = p0; b[y * 2 + 1] = p1; b[16 + y * 2] = p2; b[16 + y * 2 + 1] = p3;
             }
         }
-
-    /* place the 4 tile refs (TL,TR,BL,BR) at rows 0-1, cols 30-31 */
-    bg3map[0 * 32 + MM_COL]     = (u16)(MM_TILE0)     | (BG3_TEXT_PAL << 10) | 0x2000;
-    bg3map[0 * 32 + MM_COL + 1] = (u16)(MM_TILE0 + 1) | (BG3_TEXT_PAL << 10) | 0x2000;
-    bg3map[1 * 32 + MM_COL]     = (u16)(MM_TILE0 + 2) | (BG3_TEXT_PAL << 10) | 0x2000;
-    bg3map[1 * 32 + MM_COL + 1] = (u16)(MM_TILE0 + 3) | (BG3_TEXT_PAL << 10) | 0x2000;
     mm_dirty = 1;
-    game_map_dirty = 1;
 }
 
 /* Drop the minimap's cached state so it rebuilds on the next frame (level load /
@@ -790,6 +1013,8 @@ void render_clear_screen(void) {
      * black. During gameplay/other scenes BG2 is opaque, so this stays hidden. */
     u16 blk = (u16)(BG3_TEXT_PAL << 10);
     for (i = 0; i < 32 * 32; i++) { bg1map[i] = 0; bg3map[i] = blk; }
+    edge_last_mask = 0;        /* edge-warning strips were just wiped */
+    oamSetVisible((u16)(OAM_MINIMAP * 4), OBJ_HIDE);  /* no minimap on text scenes */
 }
 
 void render_text(u8 x, u8 y, const char *s) {
@@ -800,7 +1025,64 @@ void render_num(u8 x, u8 y, u32 val, u8 digits) {
     hud_putnum(x, y, val, digits);
 }
 
+/* Level-complete stats banner: an opaque dark BG3 fill below the HUD with the
+ * level number, time bonus, and per-level stats (port of showLevelComplete). */
+void render_lc_banner(void) {
+    u16 i;
+    u16 blk = (u16)((BG3_TEXT_PAL << 10) | 0x2000);     /* opaque black, high prio */
+    for (i = 2 * 32; i < 32 * 32; i++) bg3map[i] = blk; /* dark backing (keep HUD rows 0-1) */
+    hud_puts(9, 8, "LEVEL");      hud_putnum(15, 8, game.current_level, 2);
+    hud_puts(18, 8, "COMPLETE");
+    hud_puts(9, 12, "TIME BONUS"); hud_putnum(21, 12, game.time_bonus, 4);
+    hud_puts(9, 14, "BLOCKS");     hud_putnum(21, 14, game.blocks_crushed, 3);
+    hud_puts(9, 16, "ENEMIES");    hud_putnum(21, 16, game.enemies_killed, 3);
+}
+
 void render_hide_sprites(void) {
     u8 i;
     for (i = 0; i < 16; i++) oamSetVisible((u16)(i * 4), OBJ_HIDE);
+    /* NOTE: the minimap (slot 26) is intentionally NOT hidden here -- this runs
+     * every frame of a section slide, and the minimap should stay put. Scenes
+     * hide it via render_clear_screen instead. */
+}
+
+/* Transient centred flash banner (e.g. SECTION CLEARED / NO ENTRY): a short
+ * opaque-black BG3 strip on row 13 with white text. render_flash_clear restores
+ * those cells to transparent so the playfield shows through again. */
+static u8 flash_x0, flash_x1;
+#define FLASH_ROW 13
+void render_flash(const char *s) {
+    u8 len = 0, x, x0;
+    u16 blk = (u16)((BG3_TEXT_PAL << 10) | 0x2000);
+    while (s[len]) len++;
+    x0 = (u8)((32 - len) / 2);
+    flash_x0 = (u8)(x0 ? x0 - 1 : 0);
+    flash_x1 = (u8)(x0 + len + 1); if (flash_x1 > 32) flash_x1 = 32;
+    for (x = flash_x0; x < flash_x1; x++) bg3map[FLASH_ROW * 32 + x] = blk;
+    render_text(x0, FLASH_ROW, s);
+}
+void render_flash_clear(void) {
+    u8 x;
+    for (x = flash_x0; x < flash_x1; x++) bg3map[FLASH_ROW * 32 + x] = 0;
+}
+
+/* Draw the enemy edge-warning strips for the given direction mask (bit0=up,
+ * bit1=down, bit2=left, bit3=right) on BG3; edges not in the mask are cleared.
+ * Only touches VRAM when the mask changes. */
+void render_edge_warn(u8 mask) {
+    u8 i;
+    u8 top = (u8)(PLAYFIELD_OFFSET_Y >> 3);          /* first playfield tile row */
+    u8 bot = (u8)(top + GRID_ROWS * 2 - 1);          /* last playfield tile row  */
+    u16 P  = (u16)((BG3_TEXT_PAL << 10) | 0x2000);
+    if (mask == edge_last_mask) return;
+    edge_last_mask = mask;
+    for (i = 0; i < 32; i++) {
+        bg3map[top * 32 + i] = (mask & 1) ? (u16)(EDGE_TILE_TOP | P) : 0;
+        bg3map[bot * 32 + i] = (mask & 2) ? (u16)(EDGE_TILE_TOP | P | 0x8000) : 0;  /* V-flip */
+    }
+    for (i = top; i <= bot; i++) {
+        bg3map[i * 32 + 0]  = (mask & 4) ? (u16)(EDGE_TILE_LEFT | P) : 0;
+        bg3map[i * 32 + 31] = (mask & 8) ? (u16)(EDGE_TILE_LEFT | P | 0x4000) : 0;  /* H-flip */
+    }
+    game_map_dirty = 1;
 }

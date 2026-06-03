@@ -44,6 +44,7 @@ typedef struct {
 
     u8  anim_frame;             /* bob 0/1 */
     u8  anim_timer;
+    u8  idle_col;               /* idle look-around column 0/1/2, or 0xFF = use facing */
 } Player;
 
 /* ---- Mortal enemy ---- */
@@ -99,6 +100,7 @@ typedef struct {
     u8  just_fired;             /* set the frame a zap fires             */
     u8  zap_direction;
     u8  zap_distance;           /* actual tiles (stops at boulder)       */
+    u8  zap_gems;               /* gems destroyed by the last zap (-> collected) */
     u8  zap_anim_frame;
     u8  zap_anim_timer;
 
@@ -152,6 +154,18 @@ typedef struct {
     u8  continues;
     u16 total_gems;
     u16 gems_collected;
+
+    /* per-level stats + time bonus (shown on the level-complete banner) */
+    u16 level_start_frame;       /* game.frame when the level began            */
+    u32 level_par_ms;            /* computed par time in ms (calculateParTime)  */
+    u16 blocks_crushed;          /* blocks destroyed this level                 */
+    u16 enemies_killed;          /* enemies the player killed this level        */
+    u16 time_bonus;             /* awarded on level complete                    */
+    u16 lc_timer;                /* level-complete banner countdown (frames)    */
+
+    /* transient on-screen flash banner (SECTION CLEARED / NO ENTRY) */
+    u8  flash_timer;             /* frames remaining (0 = none)                */
+    u16 sections_cleared;        /* bitmask of sections that already flashed   */
 
     /* flags */
     u8 portal_active;

@@ -137,6 +137,7 @@ static void robot_fire(Robot *r) {
     r->zap_anim_timer = ZAP_ANIM_FRAMES;
     r->cooldown_timer = ROBOT_ZAP_COOLDOWN_FRAMES;
     r->zap_direction = r->locked_direction;
+    r->zap_gems = 0;
     audio_sfx(SFX_ZAP);
 
     for (i = 1; i <= ROBOT_ZAP_RANGE; i++) {
@@ -145,8 +146,11 @@ static void robot_fire(Robot *r) {
         if (cx < 0 || cx >= GRID_COLS || cy < 0 || cy >= GRID_ROWS) { actual = (u8)(i - 1); break; }
         t = game.sections[idx][cy][cx];
         if (t == TILE_BOULDER) { actual = (u8)(i - 1); break; }     /* beam stops at boulder */
-        if (t == TILE_BLOCK || t == TILE_GEM || t == TILE_EXTRA_LIFE_BLK || t == TILE_EXTRA_LIFE) {
-            game.sections[idx][cy][cx] = TILE_EMPTY;                /* destroyed, NOT collected */
+        /* The original only destroys blocks and gems; extra-life tiles survive. */
+        if (t == TILE_BLOCK || t == TILE_GEM) {
+            if (t == TILE_GEM) r->zap_gems++;                       /* zapped gems count as collected */
+            else               game.blocks_crushed++;              /* level stat */
+            game.sections[idx][cy][cx] = TILE_EMPTY;
             game.damage[idx][cy][cx] = 0;
         }
     }

@@ -41,11 +41,17 @@ def frame(sheet, col, row, w=16, h=16):
 
 
 def quantize_keep0(img, ncolors=16):
-    """RGBA -> indexed 'P' image. Index 0 = transparent (black); art uses 1..n-1."""
+    """RGBA -> indexed 'P' image. Index 0 = transparent (black); art uses 1..n-1.
+    Transparent pixels are neutralized to the mean opaque colour BEFORE quantizing
+    so the (usually black) transparent region doesn't steal a palette slot -- all
+    ncolors-1 entries then go to the actual sprite, giving a smoother gradient."""
     rgba = np.array(img.convert("RGBA"))
     alpha = rgba[:, :, 3]
     opaque = alpha >= 128
-    rgb = Image.fromarray(rgba[:, :, :3], "RGB")
+    rgb_arr = rgba[:, :, :3].copy()
+    if opaque.any():
+        rgb_arr[~opaque] = rgb_arr[opaque].mean(axis=0).astype(np.uint8)
+    rgb = Image.fromarray(rgb_arr, "RGB")
     pal_img = rgb.quantize(colors=ncolors - 1, method=Image.Quantize.MEDIANCUT)
     pal = pal_img.getpalette()[: (ncolors - 1) * 3]
     idx = np.array(pal_img, dtype=np.uint8)            # 0..ncolors-2
@@ -81,15 +87,18 @@ def quantize_keep0(img, ncolors=16):
 PAL0_SUBGROUPS = [([1, 2, 3, 7], 10), ([4, 5, 6], 5)]   # (block+boulder, gem); +transp = 16
 # pal1 also budgeted: the blue markers dominate by pixel count, so the lone GOLD
 # extra-life star gets a reserved share or it nearest-maps to silver.
-PAL1_SUBGROUPS = [([8, 9, 10, 11, 12, 13, 15], 10), ([14], 3)]  # (blue markers, gold star); +transp/white/black = 16
+# spawn-glow frame 2 (mt20) joins the spawn group; extra-life anim frames (mt21-23)
+# join the gold-star group, so the animation frames share the marker palette.
+PAL1_SUBGROUPS = [([8, 9, 10, 11, 12, 13, 15, 20], 10), ([14, 21, 22, 23], 3)]  # (blue markers, gold star); +transp/white/black = 16
 # Metatiles 16,17 = block shatter (frames 3,4); 18,19 = gem shatter. They live in
 # pal0 (block/gem material) but are NOT given their own palette budget -- they're
 # nearest-mapped to the static block/gem colors (a brief destruction flash), so
 # the persistent block/gem/boulder keep their full color fidelity.
-PAL0_CRUSH = [16, 17, 18, 19]
-NMETA = 20
+# 24-27 = gem glitter frames -> pal0 (gem material), indexed against (not budgeted into) it.
+PAL0_CRUSH = [16, 17, 18, 19, 24, 25, 26, 27]
+NMETA = 28
 # Per-metatile sub-palette for render.c (mirrors the grouping above).
-MT_PAL = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0]
+MT_PAL = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0]
 
 
 def enc_tile(t):
@@ -138,17 +147,36 @@ def apply_tint(img, tint):
     return Image.fromarray(a.astype(np.uint8), "RGBA")
 
 
-def boost(img, sat=1.65, contrast=1.13):
+def boost(img, sat=1.65, contrast=1.13, bright=1.0):
     """Make a tile 'pop' more: raise saturation + a touch of contrast (alpha
     preserved). Used on the gameplay objects so they stand out against the faded,
-    gray-washed background."""
+    gray-washed background. `bright`<1 DARKENS while saturating ('deepen') -- use
+    it for colours like the player's pink whose channels are already near max, so
+    saturation alone would clamp two channels (-> magenta) instead of enriching."""
     a = img.convert("RGBA")
     alpha = a.getchannel("A")
     rgb = ImageEnhance.Color(a.convert("RGB")).enhance(sat)
-    rgb = ImageEnhance.Contrast(rgb).enhance(contrast)
+    if contrast != 1.0:
+        rgb = ImageEnhance.Contrast(rgb).enhance(contrast)
+    if bright != 1.0:
+        rgb = ImageEnhance.Brightness(rgb).enhance(bright)
     out = rgb.convert("RGBA")
     out.putalpha(alpha)
     return out
+
+
+def shade_vertical(img, top=1.08, bot=0.5):
+    """Top-lit vertical brightness gradient applied PER 16px frame row: brightest at
+    the frame's top, darkening toward the bottom. The player art is FLAT (a uniformly
+    bright saturated pink ball) which reads as a flat/intense blob; the enemy art is
+    SHADED (light top -> dark bottom = a 3D sphere), which is why it looks nicer. This
+    sculpts the flat ball into a lit sphere. Alpha preserved."""
+    a = np.array(img.convert("RGBA")).astype(np.float32)
+    for fy in range(a.shape[0]):
+        ry = (fy % 16) / 15.0
+        k = top + (bot - top) * ry
+        a[fy, :, :3] = np.clip(a[fy, :, :3] * k, 0, 255)
+    return Image.fromarray(a.astype(np.uint8), "RGBA")
 
 
 def bevel(img, hi=42, lo=56):
@@ -177,7 +205,7 @@ def gameplay_tiles(gem_sheet="gem-1.png", iron_col=0, block_tint=None):
         block = apply_tint(block, block_tint)
     portal = load("portal.png"); spawn = load("spawn-point.png")
     rspawn = load("robot-spawn-point.png"); elife = load("extralife.png")
-    tiles = [None] * 20
+    tiles = [None] * 28
     tiles[0] = Image.new("RGBA", (16, 16), (0, 0, 0, 0))    # empty/transparent
     # block/gem damage states = frames 0,1,2 (intact -> cracked), matching the
     # original's static damage; the shatter frames 3,4 are the crush animation.
@@ -192,7 +220,13 @@ def gameplay_tiles(gem_sheet="gem-1.png", iron_col=0, block_tint=None):
     # crush (destruction) animation frames -- shatter; played on destroy.
     tiles[16] = frame(block, 3, 0); tiles[17] = frame(block, 4, 0)   # block shatter
     tiles[18] = frame(gem, 3, 0);   tiles[19] = frame(gem, 4, 0)     # gem shatter
-    for i in range(1, 20):              # all game objects + shatter pop vs the faded bg
+    # spawn-point glow frame 2 + extra-life pickup frames 1,2,3 (animation frames).
+    tiles[20] = frame(spawn, 2, 0)
+    tiles[21] = frame(elife, 1, 0); tiles[22] = frame(elife, 2, 0); tiles[23] = frame(elife, 3, 0)
+    # gem glitter frames (gem sheet row 1, cols 0-3) -- the periodic sparkle.
+    tiles[24] = frame(gem, 0, 1); tiles[25] = frame(gem, 1, 1)
+    tiles[26] = frame(gem, 2, 1); tiles[27] = frame(gem, 3, 1)
+    for i in range(1, 28):              # all game objects + shatter pop vs the faded bg
         tiles[i] = boost(tiles[i])
     for i in (1, 2, 3, 4, 5, 6, 7):     # block, gem, boulder get the depth bevel (not shatter)
         tiles[i] = bevel(tiles[i])
@@ -375,7 +409,11 @@ def main():
         build_bg_tiles(lvl)
 
     print(">> player sprite sheet (128-wide OBJ layout)")
-    build_obj(load("player.png"), "spr_player", do_boost=True)
+    # Player: user-redrawn art (player-fixed.png in the project root) -- already properly
+    # shaded with a dark outline, so it takes the standard saturation pop cleanly (no flat
+    # ball, no shading hack needed). do_boost=True = the original vivid treatment.
+    build_obj(Image.open(os.path.join(PROJ, "player-fixed.png")).convert("RGBA"),
+              "spr_player", do_boost=True)
 
     print(">> enemy sprite sheet")
     build_obj(load("enemy.png"), "spr_enemy", do_boost=True)

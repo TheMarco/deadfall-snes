@@ -22,6 +22,7 @@ u8 game_map_dirty;
 static u8 trans_hold;   /* slide: hold one aligned frame before committing (vblank scroll lag) */
 
 static void check_falls_crush(u8 include_player);   /* fwd; player crush is usually per-frame */
+static void check_section_cleared(void);            /* fwd; flashes "SECTION CLEARED" */
 
 /* ---- smooth falling tiles ---------------------------------------------------
  * Gravity settles the grid instantly (logic), but each tile that moved slides
@@ -33,6 +34,12 @@ static u8 fall_anim_n;
 #define FALL_DY 3                /* px/frame (~90ms per cell, near the JS 100ms) */
 
 static u8 crush_pending;         /* a destroy is mid-shatter -> run gravity when it ends */
+static u8 crush_completed;        /* a mine just destroyed a tile -> lock mining until the
+                                   * mine button is released+re-pressed (original crushCompleted),
+                                   * so holding mine can't auto-chew through a wall */
+static u8 elife_idx, elife_timer; /* extra-life pickup animation cursor */
+static u8 glitter_timer, glitter_phase;   /* gem glitter cycle */
+static u8 push_grav_timer;                /* deferred gravity after a push (200ms grace) */
 
 /* Land any still-falling tiles immediately (draw on BG1) and clear their OBJ. */
 static void finalize_falls(void) {
@@ -130,11 +137,62 @@ static void check_falls_crush(u8 include_player) {
                 (e->is_moving && f->to_x == (u8)(s8)e->target_x && f->to_y == (u8)(s8)e->target_y)) {
                 enemy_die(e);
                 game.score += SCORE_CRUSH_KILL;
+                game.enemies_killed++;
                 audio_sfx(SFX_ENEMYKILL);
                 break;
             }
         }
     }
+}
+
+/* Par time in ms for the current level (port of calculateParTime): scan all
+ * sections for gems/blocks, estimate travel + mining time, scale by section
+ * count and enemy/robot count. Integer math; multipliers are x100 fixed-point. */
+static u32 compute_par_ms(void) {
+    u16 gems = 0, blocks = 0, nsec, smul, emul, est_blocks, travel;
+    u8 r, c, gx, gy, idx;
+    u32 base, par;
+    for (r = 0; r < game.world_rows; r++)
+        for (c = 0; c < game.world_cols; c++) {
+            idx = world_section_index(r, c);
+            for (gy = 0; gy < GRID_ROWS; gy++)
+                for (gx = 0; gx < GRID_COLS; gx++) {
+                    u8 t = game.sections[idx][gy][gx];
+                    if (t == TILE_GEM) gems++;
+                    else if (t == TILE_BLOCK) blocks++;
+                }
+        }
+    nsec = (u16)(game.world_rows * game.world_cols);
+    est_blocks = (u16)((u32)blocks * 7 / 100);          /* floor(blocks * 0.07) */
+    travel = (u16)(gems * 4 + (nsec ? (nsec - 1) : 0) * 10);
+    base = (u32)gems * 3 * 350 + (u32)est_blocks * 3 * 350 + (u32)travel * 220 + 2000;
+    switch (nsec) {                                      /* section multiplier x100 */
+        case 4:  smul = 100; break;
+        case 6:  smul = 130; break;
+        case 9:  smul = 175; break;
+        case 12: smul = 210; break;
+        case 16: smul = 270; break;
+        default: smul = (u16)(100 + (nsec - 4) * 14); break;
+    }
+    emul = (u16)(100 + game.cfg.enemies * 3 + game.cfg.robots * 2);  /* enemy mult x100 */
+    par = base * smul / 100;
+    par = par * emul / 100;
+    return par;
+}
+
+/* Time bonus (port of calculateTimeBonus): 5000 at/under par, -50/sec over,
+ * floored at 0, rounded to nearest 10. */
+static u16 compute_time_bonus(void) {
+    u16 ef = (u16)(game.frame - game.level_start_frame);   /* elapsed frames */
+    u32 elapsed_ms = (u32)ef * 1000 / 60;
+    u16 bonus;
+    if (elapsed_ms <= game.level_par_ms) {
+        bonus = 5000;
+    } else {
+        u32 ded = (elapsed_ms - game.level_par_ms) / 1000 * 50;
+        bonus = (ded >= 5000) ? 0 : (u16)(5000 - ded);
+    }
+    return (u16)((bonus + 5) / 10 * 10);
 }
 
 static void load_level(u8 n) {
@@ -174,7 +232,26 @@ static void load_level(u8 n) {
     fall_anim_n = 0;              /* drop any in-flight falling-tile anims */
     for (i = 0; i < 16; i++) game.cell_anims[i].active = 0;  /* drop shatter anims */
     crush_pending = 0;
+    crush_completed = 0;
     game.gravity_resolving = 0;
+    game.is_level_complete = 0;
+    game.lc_timer = 0;
+    game.portal_frame = 0;
+    game.portal_timer = 0;
+    game.spawn_glow_index = 0;
+    game.spawn_glow_timer = 0;
+    game.flash_timer = 0;
+    game.sections_cleared = 0;
+    game.player.idle_col = 0xFF;
+    elife_idx = 0;
+    elife_timer = 0;
+    glitter_timer = 0;
+    glitter_phase = 0;
+    push_grav_timer = 0;
+    game.blocks_crushed = 0;
+    game.enemies_killed = 0;
+    game.level_start_frame = game.frame;
+    game.level_par_ms = compute_par_ms();   /* needs sections loaded (done above) */
     render_falls_hide();
     render_minimap_reset();       /* rebuild the minimap for the new level's world */
     render_clear_screen();        /* wipe any leftover scene text (e.g. title) from BG3 */
@@ -199,6 +276,7 @@ void game_continue(void) {
     if (game.continues == 0) return;
     game.continues--;
     game.lives = START_LIVES;
+    game.score = 0;             /* a continue wipes the score, like the original */
     game.is_game_over = 0;
     load_level(game.current_level);
     game_map_dirty = 1;
@@ -256,6 +334,161 @@ static void crush_anims_update(void) {
     }
 }
 
+/* A gem that just FELL takes one hit of damage on landing (original
+ * applyFallDamageToGems): 3 falls destroy it. A fall-destroyed gem counts as
+ * collected (+score, may open the portal) and shatters; the shatter then
+ * re-runs gravity (cascade), exactly like a mined gem. */
+static void gem_fall_damage(u8 gx, u8 gy) {
+    u8 idx = world_section_index(game.cur_row, game.cur_col);
+    if (game.sections[idx][gy][gx] != TILE_GEM) { render_set_cell(gx, gy); return; }
+    if (world_damage_tile(gx, gy)) {                 /* reached 3 hits -> destroyed */
+        world_set_tile(gx, gy, TILE_EMPTY);
+        world_clear_damage(gx, gy);
+        game.gems_collected++;
+        game.score += SCORE_GEM;
+        if (!game.portal_active && game.gems_collected >= game.total_gems) {
+            game.portal_active = 1;
+            game.alarm_active = 1;
+            audio_sfx(SFX_PORTAL);
+        } else {
+            audio_sfx(SFX_COLLECT);
+        }
+        crush_anim_add(gx, gy, MT_GEM_CRUSH);        /* shatter -> cascades gravity */
+        crush_pending = 1;
+        check_section_cleared();
+    } else {
+        render_set_cell(gx, gy);                     /* show the new damage frame */
+    }
+    game_map_dirty = 1;
+}
+
+/* Marker animations on the current section: the enemy spawn point glows on a
+ * [0,1,2,1] cycle and a revealed extra-life pickup plays [0,1,2,3,2,1], both at
+ * 200ms/frame (port of the spawn/extra-life sprite animations). */
+static const u8 spawn_frames[4] = { MT_SPAWN0, 13, MT_SPAWN2, 13 };
+static const u8 elife_frames[6] = { MT_EXTRALIFE, MT_ELIFE1, 22, 23, 22, 21 };
+
+static void update_marker_anims(void) {
+    u8 cidx = world_section_index(game.cur_row, game.cur_col);
+    u8 k, gx, gy;
+
+    if (game.spawn_glow_timer) game.spawn_glow_timer--;
+    if (game.spawn_glow_timer == 0) {
+        game.spawn_glow_index = (u8)((game.spawn_glow_index + 1) & 3);
+        game.spawn_glow_timer = SPAWN_ANIM_FRAMES;
+        for (k = 0; k < game.spawn_count[cidx]; k++)
+            render_crush_cell(game.spawn_points[cidx][k].x, game.spawn_points[cidx][k].y,
+                              spawn_frames[game.spawn_glow_index]);
+        game_map_dirty = 1;
+    }
+
+    if (elife_timer) elife_timer--;
+    if (elife_timer == 0) {
+        u8 *g = &game.sections[cidx][0][0];
+        u16 off = 0;
+        u8 found = 0, mt;
+        elife_idx = (u8)(elife_idx + 1); if (elife_idx >= 6) elife_idx = 0;
+        elife_timer = SPAWN_ANIM_FRAMES;
+        mt = elife_frames[elife_idx];
+        for (gy = 0; gy < GRID_ROWS; gy++)
+            for (gx = 0; gx < GRID_COLS; gx++, off++)
+                if (g[off] == TILE_EXTRA_LIFE) { render_crush_cell(gx, gy, mt); found = 1; }
+        if (found) game_map_dirty = 1;
+    }
+}
+
+/* Enemy edge-warnings: when the player is within 3 tiles of an edge AND a live
+ * enemy/robot sits in the adjacent section within wrapped distance 5, flash a
+ * strip on that edge (port of drawEnemyWarnings; the original's red is shown
+ * white here since red is palette-blocked). */
+static void update_edge_warnings(void) {
+    Player *p = &game.player;
+    static const s8 edr[4] = { -1, 1, 0, 0 };   /* up, down, left, right */
+    static const s8 edc[4] = {  0, 0, -1, 1 };
+    u8 nearedge[4], d, mask = 0;
+    s16 pgx = (s16)(p->section_col * GRID_COLS + p->x);
+    s16 pgy = (s16)(p->section_row * GRID_ROWS + p->y);
+    s16 totc = (s16)(game.world_cols * GRID_COLS);
+    s16 totr = (s16)(game.world_rows * GRID_ROWS);
+    nearedge[0] = (u8)(p->y <= 3);
+    nearedge[1] = (u8)(p->y >= GRID_ROWS - 1 - 3);
+    nearedge[2] = (u8)(p->x <= 3);
+    nearedge[3] = (u8)(p->x >= GRID_COLS - 1 - 3);
+    for (d = 0; d < 4; d++) {
+        u8 ar, ac, i, hit = 0;
+        if (!nearedge[d]) continue;
+        ar = (u8)((p->section_row + edr[d] + game.world_rows) % game.world_rows);
+        ac = (u8)((p->section_col + edc[d] + game.world_cols) % game.world_cols);
+        for (i = 0; i < game.enemy_count && !hit; i++) {
+            Enemy *e = &game.enemies[i];
+            s16 xd, yd;
+            if (!e->alive || e->section_row != ar || e->section_col != ac) continue;
+            xd = ai_wrapped_diff(pgx, (s16)(e->section_col * GRID_COLS + e->x), totc);
+            yd = ai_wrapped_diff(pgy, (s16)(e->section_row * GRID_ROWS + e->y), totr);
+            if (xd < 0) xd = (s16)-xd;
+            if (yd < 0) yd = (s16)-yd;
+            if (xd + yd <= 5) hit = 1;
+        }
+        if (!hit && game.robot_count > 0 && game.robots[0].alive &&
+            game.robots[0].section_row == ar && game.robots[0].section_col == ac) {
+            Robot *rb = &game.robots[0];
+            s16 xd = ai_wrapped_diff(pgx, (s16)(rb->section_col * GRID_COLS + rb->x), totc);
+            s16 yd = ai_wrapped_diff(pgy, (s16)(rb->section_row * GRID_ROWS + rb->y), totr);
+            if (xd < 0) xd = (s16)-xd;
+            if (yd < 0) yd = (s16)-yd;
+            if (xd + yd <= 5) hit = 1;
+        }
+        if (hit) mask |= (u8)(1 << d);
+    }
+    if (!((game.frame >> 3) & 1)) mask = 0;     /* blink ~133ms */
+    render_edge_warn(mask);
+}
+
+/* Gem glitter: every ~150ms advance a phase; each undamaged gem on the current
+ * section sparkles (glitter frames 24-27) for 4 ticks out of a 32-tick cycle,
+ * staggered by a position hash so they twinkle independently (port of the gem
+ * glitter; damaged gems never glitter). Skipped while gravity resolves so it
+ * doesn't fight falling tiles. */
+#define GLITTER_TICK   9     /* ~150ms per glitter frame */
+#define GLITTER_CYCLE  32    /* total cycle in ticks (power of 2 -> mask, no divide) */
+
+static void update_glitter(void) {
+    u8 cidx, gx, gy, drew = 0;
+    u8 *grid, *dmg;
+    u16 off = 0;
+    if (game.gravity_resolving) return;
+    if (glitter_timer) { glitter_timer--; return; }
+    glitter_timer = GLITTER_TICK;
+    glitter_phase = (u8)((glitter_phase + 1) & (GLITTER_CYCLE - 1));
+    cidx = world_section_index(game.cur_row, game.cur_col);
+    grid = &game.sections[cidx][0][0];
+    dmg  = &game.damage[cidx][0][0];
+    for (gy = 0; gy < GRID_ROWS; gy++)
+        for (gx = 0; gx < GRID_COLS; gx++, off++) {
+            u8 local;
+            if (grid[off] != TILE_GEM || dmg[off]) continue;   /* only undamaged gems */
+            local = (u8)((glitter_phase + gx * 5 + gy * 3) & (GLITTER_CYCLE - 1));
+            if (local < 4) render_crush_cell(gx, gy, (u8)(MT_GEM_GLITTER + local));
+            else           render_set_cell(gx, gy);
+            drew = 1;
+        }
+    if (drew) game_map_dirty = 1;
+}
+
+/* After a gem is collected, flash "SECTION CLEARED" the first time the current
+ * section runs out of gems (port of checkSectionCleared). */
+static void check_section_cleared(void) {
+    u8 cidx = world_section_index(game.cur_row, game.cur_col);
+    u8 *g = &game.sections[cidx][0][0];
+    u16 k;
+    if (game.sections_cleared & (u16)(1 << cidx)) return;
+    for (k = 0; k < SECTION_TILES; k++) if (g[k] == TILE_GEM) return;   /* gems remain */
+    game.sections_cleared |= (u16)(1 << cidx);
+    game.flash_timer = 90;             /* ~1.5s */
+    render_flash("SECTION CLEARED");
+    game_map_dirty = 1;
+}
+
 static void do_mine(s8 dx, s8 dy) {
     u8 tile, destroyed, mx, my, base_mt;
     if (game.mine_cooldown) return;
@@ -283,15 +516,18 @@ static void do_mine(s8 dx, s8 dy) {
         audio_sfx(SFX_CRUSH);
     } else {
         world_set_tile(mx, my, TILE_EMPTY);        /* plain block destroyed */
+        game.blocks_crushed++;
         audio_sfx(SFX_CRUSH);
     }
     world_clear_damage(mx, my);
     /* play the shatter; gravity is deferred until it finishes (crush_anims_update) */
     crush_anim_add(mx, my, base_mt);
     crush_pending = 1;
+    crush_completed = 1;     /* lock mining until the mine button is released+re-pressed */
     /* block walking into the just-cleared cell until gravity settles (crush safety) */
     game.crushed_x = mx; game.crushed_y = my;
     game.crush_safety_timer = CRUSH_SAFETY_FRAMES;
+    if (tile == TILE_GEM) check_section_cleared();
 }
 
 static void cancel_push(void) { game.push_pending = 0; }
@@ -327,7 +563,12 @@ static void do_move(s8 dx, s8 dy) {
 
     player_move(dx, dy, &r);
 
-    if (r.section_blocked) audio_sfx(SFX_NOENTRY);
+    if (r.section_blocked) {
+        audio_sfx(SFX_NOENTRY);
+        game.flash_timer = 30;          /* ~0.5s "NO ENTRY" flash */
+        render_flash("NO ENTRY");
+        game_map_dirty = 1;
+    }
 
     if (r.transition) {
         game.trans_dir = r.dir;
@@ -356,7 +597,7 @@ static void do_move(s8 dx, s8 dy) {
         if (!r.cross_push && (p->x + dx) >= 0 && (p->x + dx) < GRID_COLS)
             render_set_cell((u8)(p->x + dx), p->y);   /* tile's new cell */
         game_map_dirty = 1;
-        start_gravity();
+        push_grav_timer = 12;            /* gravity 200ms after a push (grace), like JS */
     } else if (r.collected_extra_life) {
         world_set_tile(p->x, p->y, TILE_EMPTY);
         render_set_cell(p->x, p->y);
@@ -397,9 +638,13 @@ void game_update(void) {
      * Gameplay (input, enemies, gravity) is frozen for the ~24 frames. */
     if (game.transitioning) {
         if (game.trans_phase == 2) {                       /* SLIDE (H or V) */
-            u16 cam;
+            u16 cam, lin;
             if (game.trans_timer) game.trans_timer--;
-            cam = (u16)((u32)256 * (TRANSITION_FRAMES - game.trans_timer) / TRANSITION_FRAMES);
+            lin = (u16)((u32)256 * (TRANSITION_FRAMES - game.trans_timer) / TRANSITION_FRAMES);
+            /* easeInOutQuad on the slide camera (the original eases; linear felt
+             * abrupt at the ends). cam = 2t^2 for t<0.5, else 1-2(1-t)^2. */
+            if (lin < 128) cam = (u16)((u32)2 * lin * lin / 256);
+            else { u16 q = (u16)(256 - lin); cam = (u16)(256 - (u32)2 * q * q / 256); }
             /* LEFT/UP enter from the near side, so the camera runs 256 -> 0. */
             if (game.trans_dir == DIR_LEFT || game.trans_dir == DIR_UP) cam = (u16)(256 - cam);
             render_slide_scroll(cam);
@@ -447,6 +692,17 @@ void game_update(void) {
         return;
     }
 
+    /* level-complete banner: freeze gameplay for ~5s, then advance / win. */
+    if (game.is_level_complete) {
+        if (game.lc_timer) game.lc_timer--;
+        if (game.lc_timer == 0) {
+            game.is_level_complete = 0;
+            if (game.current_level >= MAX_LEVELS) game.is_victory = 1;
+            else load_level((u8)(game.current_level + 1));
+        }
+        return;                                  /* everything paused behind the banner */
+    }
+
     /* tile-destruction shatter: advance any crush frames; releases the deferred
      * gravity when the last shatter finishes (the player's grace window). */
     crush_anims_update();
@@ -461,7 +717,10 @@ void game_update(void) {
             if (a->py >= a->py_end) {                  /* landed */
                 a->py = a->py_end;
                 a->active = 0;
-                render_set_cell(a->col, a->to_y);      /* draw the settled tile on BG1 */
+                if (a->type == TILE_GEM)               /* fallen gem takes 1 hit */
+                    gem_fall_damage(a->col, a->to_y);
+                else
+                    render_set_cell(a->col, a->to_y);  /* draw the settled tile on BG1 */
                 game_map_dirty = 1;
             } else {
                 any = 1;
@@ -486,6 +745,11 @@ void game_update(void) {
 
     if (game.mine_cooldown) game.mine_cooldown--;
     if (game.crush_safety_timer) game.crush_safety_timer--;
+    if (game.flash_timer && --game.flash_timer == 0) {   /* flash banner expired */
+        render_flash_clear();
+        game_map_dirty = 1;
+    }
+    if (push_grav_timer && --push_grav_timer == 0) start_gravity();  /* deferred push gravity */
 
     /* direction (single axis; horizontal wins ties, matching simple input) */
     if (cur & PAD_LEFT)       dx = -1;
@@ -493,16 +757,38 @@ void game_update(void) {
     else if (cur & PAD_UP)    dy = -1;
     else if (cur & PAD_DOWN)  dy = 1;
 
+    if (!(cur & (PAD_Y | PAD_B | PAD_A | PAD_X)))
+        crush_completed = 0;               /* mine button released -> re-arm mining */
+
     if (p->alive && !p->is_moving && !game.death_pending) {
         /* mine: hold any face button (A/B/X/Y) + a direction.
          * (Final scheme is Y to mine; accepting all four eases testing.) */
         if (cur & (PAD_Y | PAD_B | PAD_A | PAD_X)) {
             cancel_push();                 /* mining cancels a pending push */
-            if (dx || dy) do_mine(dx, dy);
+            if ((dx || dy) && !crush_completed) do_mine(dx, dy);   /* one tile per press */
         } else if (dx || dy) {
             do_move(dx, dy);               /* handles the push-delay internally */
         } else {
             cancel_push();                 /* direction released -> cancel */
+        }
+    }
+
+    /* idle look-around: standing still cycles columns [0,1,2,1] with the neutral
+     * pose held ~2s and the glances 200ms each (port of the Player idle anim). */
+    {
+        static u8 idle_phase, idle_timer;
+        static const u8 idle_cols[4] = { 0, 1, 2, 1 };
+        u8 standing = (u8)(p->alive && !p->is_moving && !game.death_pending &&
+                           !(dx || dy) && !(cur & (PAD_Y | PAD_B | PAD_A | PAD_X)));
+        if (standing) {
+            if (idle_timer) idle_timer--;
+            if (idle_timer == 0) {
+                idle_phase = (u8)((idle_phase + 1) & 3);
+                idle_timer = (u8)(idle_phase == 0 ? 120 : 12);   /* 2000ms / 200ms */
+            }
+            p->idle_col = idle_cols[idle_phase];
+        } else {
+            idle_phase = 0; idle_timer = 120; p->idle_col = 0xFF;
         }
     }
 
@@ -574,6 +860,18 @@ void game_update(void) {
                 if (cx >= 0 && cx < GRID_COLS && cy >= 0 && cy < GRID_ROWS)
                     render_set_cell((u8)cx, (u8)cy);
             }
+            /* zapped gems count as collected (toward the portal), like the original,
+             * so a gem Clanky destroys can never soft-lock the gem total. */
+            if (rb->zap_gems) {
+                game.gems_collected = (u16)(game.gems_collected + rb->zap_gems);
+                game.score += (u32)SCORE_GEM * rb->zap_gems;
+                if (!game.portal_active && game.gems_collected >= game.total_gems) {
+                    game.portal_active = 1;
+                    game.alarm_active = 1;
+                    audio_sfx(SFX_PORTAL);
+                }
+                check_section_cleared();
+            }
             game_map_dirty = 1;
             start_gravity();
         }
@@ -591,6 +889,7 @@ void game_update(void) {
                 if (robot_zap_hits_px(rb, e->pixel_x, e->pixel_y)) {
                     enemy_die(e);
                     game.score += SCORE_ZAP_KILL;
+                    game.enemies_killed++;
                     audio_sfx(SFX_ENEMYKILL);
                 }
             }
@@ -610,7 +909,7 @@ void game_update(void) {
     /* death -> short pause -> respawn / lose a life */
     if (!p->alive && !game.death_pending) {
         game.death_pending = 1;
-        game.death_timer = DEATH_ANIM_FRAMES * DEATH_ANIM_COUNT;
+        game.death_timer = DEATH_SEQ_FRAMES;   /* anim + 100ms tail before respawn */
     }
     if (game.death_pending) {
         if (game.death_timer) game.death_timer--;
@@ -618,8 +917,21 @@ void game_update(void) {
             game.death_pending = 0;
             finalize_falls();                     /* clear any falling-tile OBJ */
             if (game.lives > 1) {                 /* still have lives -> respawn */
+                u8 sx, sy, sr, sc, k;
                 game.lives--;
                 player_respawn();
+                /* send enemies (and the robot) back to their spawn points, like the
+                 * original's respawnPlayer -> enemy.reset() for all enemies. */
+                if (find_spawn(&sx, &sy, &sr, &sc)) {
+                    u16 md = get_enemy_move_delay(game.current_level);
+                    for (k = 0; k < game.enemy_count; k++)
+                        enemy_reset(&game.enemies[k], k, sx, sy, sr, sc, md,
+                                    (u16)(ENEMY_INITIAL_SPAWN_FRAMES + k * ENEMY_SPAWN_STAGGER_FRAMES));
+                }
+                if (game.robot_count > 0)
+                    robot_reset(&game.robots[0], game.cfg.robot_x, game.cfg.robot_y,
+                                game.cfg.robot_row, game.cfg.robot_col,
+                                get_robot_move_delay(game.current_level));
                 game.fall_count = gravity_settle(game.fall_tiles, SECTION_TILES);
                 render_bg2_reset();           /* back at start section -> BG2 phase 0 */
                 render_build_map();
@@ -631,13 +943,40 @@ void game_update(void) {
         }
     }
 
-    /* reach the active portal -> next level, or win after the last */
-    if (game.portal_active && !p->is_moving && p->alive &&
+    if (game.alarm_active) {  /* drive the alarm-vignette pulse phase (render_apply_alarm) */
+        game.alarm_timer++;
+        if (game.alarm_timer >= 2 * ALARM_PULSE_FRAMES) game.alarm_timer = 0;
+    }
+
+    update_marker_anims();   /* spawn-point glow + extra-life pickup animation */
+    update_edge_warnings();  /* flash a strip if enemies lurk in an adjacent section */
+
+    /* animate the open exit: cycle the 4 portal frames while it's active and on
+     * the current section (the original loops the portal sprite when open). */
+    if (game.portal_active && game.has_portal &&
+        game.portal_row == game.cur_row && game.portal_col == game.cur_col) {
+        if (game.portal_timer) game.portal_timer--;
+        if (game.portal_timer == 0) {
+            game.portal_frame = (u8)((game.portal_frame + 1) & 3);
+            game.portal_timer = PORTAL_ANIM_FRAMES;
+            render_crush_cell(game.portal.x, game.portal.y,
+                              (u8)(MT_PORTAL0 + game.portal_frame));
+            game_map_dirty = 1;
+        }
+    }
+
+    /* reach the active portal -> award the time bonus and show the level-complete
+     * stats banner (the countdown at the top of game_update advances afterwards). */
+    if (game.portal_active && !game.is_level_complete && !p->is_moving && p->alive &&
         p->section_row == game.portal_row && p->section_col == game.portal_col &&
         p->x == game.portal.x && p->y == game.portal.y) {
-        game.score += 1000;                       /* level-clear bonus */
-        if (game.current_level >= MAX_LEVELS) game.is_victory = 1;
-        else load_level((u8)(game.current_level + 1));
+        game.time_bonus = compute_time_bonus();
+        game.score += game.time_bonus;
+        game.alarm_active = 0;          /* stop the alarm vignette for the banner */
+        game.is_level_complete = 1;
+        game.lc_timer = LC_BANNER_FRAMES;
+        render_lc_banner();
+        game_map_dirty = 1;
     }
 
     render_player();
