@@ -54,6 +54,20 @@ static u8  slide_dir;
 static u16 scr_bg1x, scr_bg1y, scr_bg2x, scr_bg2y;
 static u8  scroll_dirty;
 
+/* Each gameplay metatile's BG sub-palette bits (palette<<10 for the tilemap):
+ * pal 0 = block/boulder/gem (CGRAM 0-15), pal 1 = portal/spawn/extra-life/
+ * robot-spawn (CGRAM 16-31). The two-palette split lets gems stay vivid red
+ * while the blue/gold markers keep their own colors. Kept in sync with
+ * tools/build_gfx.py MT_PAL (grouping by hue). */
+static const u16 mt_palbits[16] = {
+    0, 0, 0, 0,                    /* empty, block x3            -> pal 0 */
+    0, 0, 0,                       /* gem x3                     -> pal 0 */
+    0,                             /* boulder                    -> pal 0 */
+    1 << 10, 1 << 10, 1 << 10, 1 << 10,   /* portal x4           -> pal 1 */
+    1 << 10, 1 << 10,             /* spawn x2                    -> pal 1 */
+    1 << 10, 1 << 10             /* extra-life, robot-spawn      -> pal 1 */
+};
+
 /* Map a tile type (+ damage) to its BG1 metatile index. */
 static u8 metatile_for(u8 t, u8 dmg) {
     switch (t) {
@@ -75,12 +89,13 @@ void render_set_cell(u8 gx, u8 gy) {
     u8 t   = game.sections[idx][gy][gx];
     u8 mt  = metatile_for(t, game.damage[idx][gy][gx]);
     u16 base = (u16)(mt * 4);
+    u16 pb  = mt_palbits[mt];                            /* sub-palette bits */
     u16 col = (u16)(gx * 2);
     u16 row = (u16)((PLAYFIELD_OFFSET_Y >> 3) + gy * 2);  /* below the HUD/margin */
-    bg1map[row * 32 + col]           = base;             /* TL */
-    bg1map[row * 32 + col + 1]       = (u16)(base + 1);  /* TR */
-    bg1map[(row + 1) * 32 + col]     = (u16)(base + 2);  /* BL */
-    bg1map[(row + 1) * 32 + col + 1] = (u16)(base + 3);  /* BR */
+    bg1map[row * 32 + col]           = base | pb;             /* TL */
+    bg1map[row * 32 + col + 1]       = (u16)(base + 1) | pb;  /* TR */
+    bg1map[(row + 1) * 32 + col]     = (u16)(base + 2) | pb;  /* BL */
+    bg1map[(row + 1) * 32 + col + 1] = (u16)(base + 3) | pb;  /* BR */
 }
 
 /* Blank a grid cell's four BG1 entries (the tile is shown as a falling OBJ
@@ -145,11 +160,12 @@ static void render_build_section_to(u16 *buf, u8 sr, u8 sc) {
         for (gx = 0; gx < GRID_COLS; gx++) {
             u8 t  = game.sections[idx][gy][gx];
             u8 mt = metatile_for(t, game.damage[idx][gy][gx]);
-            u16 b = (u16)(mt * 4), col = (u16)(gx * 2), row = (u16)(base + gy * 2);
-            buf[row * 32 + col]           = b;
-            buf[row * 32 + col + 1]       = (u16)(b + 1);
-            buf[(row + 1) * 32 + col]     = (u16)(b + 2);
-            buf[(row + 1) * 32 + col + 1] = (u16)(b + 3);
+            u16 b = (u16)(mt * 4), pb = mt_palbits[mt];
+            u16 col = (u16)(gx * 2), row = (u16)(base + gy * 2);
+            buf[row * 32 + col]           = b | pb;
+            buf[row * 32 + col + 1]       = (u16)(b + 1) | pb;
+            buf[(row + 1) * 32 + col]     = (u16)(b + 2) | pb;
+            buf[(row + 1) * 32 + col + 1] = (u16)(b + 3) | pb;
         }
 }
 
@@ -256,6 +272,20 @@ void render_load_background(void) {
     setScreenOff();
     render_load_tileset();
     render_set_background();
+    /* Re-assert the single-screen, grid-aligned BG1 view -- exactly what the
+     * section-slide commit (render_flush_map slide_pending==2) does. A freshly
+     * loaded section must look identical to one arrived at via a slide; without
+     * this the first section after a cold boot can render the playfield shifted
+     * off the player's grid until you slide once. (Relying on render_init's
+     * one-time setup isn't enough on the real hardware path -- the slide proves
+     * these two writes are what align it, so we do them on every load too.) */
+    slide_pending = 0;
+    scroll_dirty  = 0;
+    scr_bg1x = 0; scr_bg1y = 0;
+    scr_bg2x = bg2_cur_x; scr_bg2y = bg2_cur_y;
+    bgSetMapPtr(0, VRAM_BG1_MAP, SC_32x32);
+    bgSetScroll(0, 0, 0);
+    bgSetScroll(1, bg2_cur_x, bg2_cur_y);
     render_flush_map();
     setScreenOn();
 }
@@ -269,10 +299,13 @@ void render_init(void) {
     bgInitTileSet(0, (u8 *)&bg_tiles_pic, (u8 *)&bg_tiles_pal, 0,
                   (u16)(&bg_tiles_picend - &bg_tiles_pic), 16 * 2,
                   BG_16COLORS, VRAM_BG1_TILES);
-    /* HUD glyph tiles live just after the gameplay tiles in the BG1 tileset,
-     * and use BG sub-palette 1 (white) so they don't touch the gameplay palette */
-    dmaCopyVram((u8 *)&hud_font_pic, VRAM_BG1_HUD, (u16)(&hud_font_picend - &hud_font_pic));
-    setPalette((u8 *)&hud_font_pal, HUD_PAL * 16, 16 * 2);
+    /* The gameplay tiles use TWO BG sub-palettes for richer color: pal 0
+     * (block/boulder/gem) was loaded above at CGRAM 0-15; pal 1 (portal/spawn/
+     * extra-life/robot-spawn) is the second half of bg_tiles.pal, loaded here at
+     * CGRAM 16-31. The BG3 HUD shares CGRAM 16-18 (transparent/white/black);
+     * pal 1 reserves those exact slots, and the HUD palette is re-asserted below,
+     * so they coexist. (The old BG1 HUD font is gone -- the HUD lives on BG3.) */
+    setPalette((u8 *)(&bg_tiles_pal) + 32, 16, 16 * 2);   /* pal1 -> CGRAM 16-31 */
     oamInitGfxSet((u8 *)&spr_player_pic, (u16)(&spr_player_picend - &spr_player_pic),
                   (u8 *)&spr_player_pal, 16 * 2, OBJPAL_PLAYER, VRAM_OBJ_TILES, OBJ_SIZE16_L32);
     /* enemy tiles share the same OBJ base, loaded just after the player tiles */

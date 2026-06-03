@@ -32,6 +32,11 @@ def load_pal(path):
     while len(out)<16: out.append((255,0,255))
     return out
 
+# Gameplay tiles now use TWO sub-palettes (see render.c mt_palbits / build_gfx
+# MT_PAL): block/boulder/gem -> pal0, the markers (metatile >= 8) -> pal1.
+def mt_palette(mt, pal0, pal1):
+    return pal1 if mt >= 8 else pal0
+
 def decode_4bpp(path):
     d=open(path,"rb").read()
     tiles=[]
@@ -62,15 +67,18 @@ def parse_section0():
     return ast.literal_eval(re.sub(r"//[^\n]*","",arr))[0]
 
 def main():
-    pal=load_pal(f"{RES}/bg_tiles.pic".replace(".pic",".pal"))
+    fullpal=load_pal(f"{RES}/bg_tiles.pal")
+    pal0,pal1=fullpal[0:16], (fullpal[16:32] if len(fullpal)>=32 else fullpal[0:16])
     bg=decode_4bpp(f"{RES}/bg_tiles.pic")
     sec=parse_section0()
 
-    # BG1 view: 256x224, HUD 16px black on top
+    # BG1 view: 256x224, HUD 16px black on top. Each metatile drawn through its
+    # own sub-palette so gems (pal0 red) and markers (pal1 blue) look correct.
     view=np.zeros((224,256,3),np.uint8)
     for gy in range(13):
         for gx in range(16):
             mt=metatile(sec[gy][gx]); base=mt*4
+            pal=mt_palette(mt,pal0,pal1)
             ox,oy=gx*16, 16+gy*16
             blit(view,bg[base+0],pal,ox,oy)       # TL
             blit(view,bg[base+1],pal,ox+8,oy)     # TR

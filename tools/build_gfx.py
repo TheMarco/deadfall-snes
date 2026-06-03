@@ -57,18 +57,58 @@ def quantize_keep0(img, ncolors=16):
     return out_img
 
 
-def compose_bg_tiles(gem_sheet="gem-1.png", iron_col=0):
-    """16x256 strip of the 16 gameplay metatiles (transparent index 0)."""
-    strip = Image.new("RGBA", (16, 16 * 16), (0, 0, 0, 0))
+# ---- BG1 gameplay tileset: TWO sub-palettes for richer color ----------------
+# All 16 gameplay metatiles used to share ONE 16-color BG palette, so blocks,
+# gems and boulders fought over 15 colors and came out muddy. The HUD moved to
+# BG3, freeing BG sub-palette 1, so we split the tiles into two groups, each with
+# its own sub-palette (assigned in the tilemap via pal<<10 in render.c).
+#
+# Grouping by HUE, not by role: the three "material" tiles the player stares at
+# -- gem (red), block (gray), boulder (gray) -- coexist in ONE palette because
+# gray is hue-neutral and only steals from white/black, never from the gem's red.
+# The SATURATED BLUE/GOLD markers are what corrupt the gem's red (mediancut spends
+# the budget on blue and the red nearest-maps to tan), so they get their own
+# palette:
+#   pal 0 (CGRAM 0-15, fully free):  block (3 dmg) + boulder + gem (3 dmg).
+#       Colors are BUDGETED per sub-group (block+boulder vs gem) so the many gray
+#       block pixels don't crowd out the gem's reds.
+#   pal 1 (CGRAM 16-31, shared w/HUD): portal + spawn + extra-life + robot-spawn.
+#       CGRAM 16/17/18 are the BG3 HUD's transparent/white/black, so pal1 reserves
+#       index 0=transparent, 1=white, 2=black (matching the HUD) and gets 13 free
+#       colors at 3..15 (the HUD font never uses 2bpp index 3, so CGRAM 19 is ours).
+# We emit .pic/.pal directly (gfx2snes makes only one palette per image), matching
+# the gs16 layout render.c expects: metatile N -> 8x8 tiles N*4..N*4+3 (TL,TR,BL,BR).
+PAL0_SUBGROUPS = [([1, 2, 3, 7], 10), ([4, 5, 6], 5)]   # (block+boulder, gem); +transp = 16
+# pal1 also budgeted: the blue markers dominate by pixel count, so the lone GOLD
+# extra-life star gets a reserved share or it nearest-maps to silver.
+PAL1_SUBGROUPS = [([8, 9, 10, 11, 12, 13, 15], 10), ([14], 3)]  # (blue markers, gold star); +transp/white/black = 16
+# Per-metatile sub-palette for render.c (mirrors the grouping above).
+MT_PAL = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1]
 
-    block = load("block.png")
-    gem = load(gem_sheet)
-    iron = load("iron-sprite.png")
-    portal = load("portal.png")
-    spawn = load("spawn-point.png")
-    rspawn = load("robot-spawn-point.png")
-    elife = load("extralife.png")
 
+def enc_tile(t):
+    """8x8 index array -> 32-byte SNES 4bpp planar tile (planes 0/1 then 2/3)."""
+    b = bytearray(32)
+    for y in range(8):
+        p0 = p1 = p2 = p3 = 0
+        for x in range(8):
+            v = int(t[y, x]); bit = 7 - x
+            p0 |= (v & 1) << bit;        p1 |= ((v >> 1) & 1) << bit
+            p2 |= ((v >> 2) & 1) << bit; p3 |= ((v >> 3) & 1) << bit
+        b[y * 2] = p0; b[y * 2 + 1] = p1; b[16 + y * 2] = p2; b[16 + y * 2 + 1] = p3
+    return bytes(b)
+
+
+def bgr555(c):
+    r, g, b = int(c[0]) >> 3, int(c[1]) >> 3, int(c[2]) >> 3
+    return r | (g << 5) | (b << 10)
+
+
+def gameplay_tiles(gem_sheet="gem-1.png", iron_col=0):
+    """The 16 gameplay metatiles as 16x16 RGBA images (index 0 = transparent)."""
+    block = load("block.png");  gem = load(gem_sheet);  iron = load("iron-sprite.png")
+    portal = load("portal.png"); spawn = load("spawn-point.png")
+    rspawn = load("robot-spawn-point.png"); elife = load("extralife.png")
     tiles = [None] * 16
     tiles[0] = Image.new("RGBA", (16, 16), (0, 0, 0, 0))    # empty/transparent
     tiles[1] = frame(block, 0, 0); tiles[2] = frame(block, 2, 0); tiles[3] = frame(block, 4, 0)
@@ -79,10 +119,100 @@ def compose_bg_tiles(gem_sheet="gem-1.png", iron_col=0):
     tiles[12] = frame(spawn, 0, 0); tiles[13] = frame(spawn, 1, 0)
     tiles[14] = frame(elife, 0, 0)
     tiles[15] = frame(rspawn, 0, 0)
+    return tiles
 
-    for i, t in enumerate(tiles):
-        strip.paste(t, (0, i * 16))
-    return strip
+
+def _mediancut(tiles, mt_idxs, n):
+    """n representative RGB colors from the opaque pixels of the given metatiles."""
+    sheet = Image.new("RGBA", (16, 16 * len(mt_idxs)), (0, 0, 0, 0))
+    for k, mt in enumerate(mt_idxs):
+        sheet.paste(tiles[mt], (0, k * 16))
+    rgba = np.array(sheet)
+    rgb = rgba[:, :, :3].copy()
+    rgb[rgba[:, :, 3] < 128] = 0                      # ignore transparent pixels
+    pal_img = Image.fromarray(rgb, "RGB").quantize(colors=n + 1, method=Image.Quantize.MEDIANCUT)
+    pal = pal_img.getpalette()
+    cols = [tuple(pal[i * 3:i * 3 + 3]) for i in range(n + 1)]
+    # drop the entry closest to pure black (the masked transparent pixels)
+    drop = min(range(len(cols)), key=lambda i: sum(c * c for c in cols[i]))
+    return [c for i, c in enumerate(cols) if i != drop][:n]
+
+
+def _index_tiles(tiles, mt_idxs, palette):
+    """Nearest-map each metatile's opaque pixels over palette[1:]; transparent->0."""
+    cand = np.array(palette[1:], dtype=np.int32)
+    res = {}
+    for mt in mt_idxs:
+        rgba = np.array(tiles[mt]); opaque = rgba[:, :, 3] >= 128
+        flat = rgba[:, :, :3].reshape(-1, 3).astype(np.int32)
+        nearest = 1 + ((flat[:, None, :] - cand[None, :, :]) ** 2).sum(2).argmin(1)
+        out = np.where(opaque.reshape(-1), nearest, 0).reshape(16, 16).astype(np.uint8)
+        res[mt] = out
+    return res
+
+
+def build_pal0(tiles):
+    """pal0 = block+boulder+gem, colors BUDGETED per sub-group so the gem's reds
+    survive the many gray block pixels. Returns ({mt: idx}, [16 RGB])."""
+    palette = [(0, 0, 0)]
+    mts = []
+    for sub_mts, budget in PAL0_SUBGROUPS:
+        palette += _mediancut(tiles, sub_mts, budget)
+        mts += sub_mts
+    palette = (palette + [(0, 0, 0)] * 16)[:16]
+    return _index_tiles(tiles, mts, palette), palette
+
+
+def build_pal1(tiles):
+    """pal1 = markers. Reserve idx 0/1/2 = transparent/white/black (the BG3 HUD
+    shares CGRAM 16/17/18); 13 quantized colors at indices 3..15, BUDGETED per
+    sub-group so the gold star isn't crowded out by the blue markers."""
+    palette = [(0, 0, 0), (255, 255, 255), (0, 0, 0)]
+    mts = []
+    for sub_mts, budget in PAL1_SUBGROUPS:
+        palette += _mediancut(tiles, sub_mts, budget)
+        mts += sub_mts
+    palette = (palette + [(0, 0, 0)] * 16)[:16]
+    return _index_tiles(tiles, mts, palette), palette
+
+
+def build_bg_tiles(gem_sheet="gem-1.png"):
+    """Write res/bg_tiles.pic (64 4bpp tiles) + res/bg_tiles.pal (32 BGR555
+    colors = pal0 then pal1), plus a truecolor-through-BGR555 debug preview."""
+    tiles = gameplay_tiles(gem_sheet)
+    tiles[0] = Image.new("RGBA", (16, 16), (0, 0, 0, 0))   # ensure empty stays transparent
+    g0, pal0 = build_pal0(tiles)
+    g1, pal1 = build_pal1(tiles)
+    g0[0] = np.zeros((16, 16), np.uint8)                   # empty metatile -> all transparent
+    idxmap = {**g0, **g1}
+    GROUP0_MT = [0] + [m for sub, _ in PAL0_SUBGROUPS for m in sub]
+
+    pic = bytearray()
+    for mt in range(16):
+        a = idxmap[mt]
+        for sy, sx in ((0, 0), (0, 8), (8, 0), (8, 8)):        # TL, TR, BL, BR
+            pic += enc_tile(a[sy:sy + 8, sx:sx + 8])
+    with open(os.path.join(RES, "bg_tiles.pic"), "wb") as f:
+        f.write(pic)
+    with open(os.path.join(RES, "bg_tiles.pal"), "wb") as f:
+        for pal in (pal0, pal1):
+            for c in pal:
+                v = bgr555(c)
+                f.write(bytes([v & 0xFF, (v >> 8) & 0xFF]))
+
+    # debug preview: render each metatile through its real BGR555 palette
+    prev = Image.new("RGB", (16, 16 * 16), (32, 32, 32))
+    for mt in range(16):
+        palette = (pal0 if mt in GROUP0_MT else pal1)
+        rgbpal = [tuple((int(ch) >> 3) * 255 // 31 for ch in col) for col in palette]
+        a = idxmap[mt]
+        cell = np.zeros((16, 16, 3), np.uint8)
+        for y in range(16):
+            for x in range(16):
+                cell[y, x] = rgbpal[a[y, x]]
+        prev.paste(Image.fromarray(cell), (0, mt * 16))
+    prev.resize((96, 96 * 16), Image.NEAREST).save(os.path.join(RES, "bg_tiles_preview.png"))
+    print(f"    -> bg_tiles.pic ({len(pic)}B), bg_tiles.pal (64B, 2 palettes)  OK")
 
 
 def run_gfx2snes(idx_png, gs=16, colors=16):
@@ -167,9 +297,8 @@ def build_obj(sheet_rgba, base, colors=16):
 
 
 def main():
-    print(">> BG1 gameplay tileset (level-1 gem/boulder)")
-    bg = quantize_keep0(compose_bg_tiles("gem-1.png", 0), 16)
-    build_one(bg, "bg_tiles")
+    print(">> BG1 gameplay tileset (2 sub-palettes: structural pal0, special pal1)")
+    build_bg_tiles("gem-1.png")
 
     print(">> player sprite sheet (128-wide OBJ layout)")
     build_obj(load("player.png"), "spr_player")

@@ -10,6 +10,17 @@ LIB="$LIBDIR/deadfall.sfc"
 
 if [ ! -f "$ROM" ]; then echo "No $ROM — run 'make' first." >&2; exit 1; fi
 
+# OpenEmu auto-resumes a save state when you relaunch a game. After a rebuild the
+# ROM layout shifts (assets grow, dead sections get discarded), so resuming an
+# old state lands on moved code/data and FREEZES (looks like "Start does nothing").
+# Clear the auto-save-state so each deploy cold-boots the new ROM. It's only an
+# auto-state of this dev ROM and OpenEmu recreates it next play session.
+AUTOSTATE="$HOME/Library/Application Support/OpenEmu/Save States/SuperNES/deadfall/Auto Save State.oesavestate"
+if [ -e "$AUTOSTATE" ]; then
+    rm -rf "$AUTOSTATE"
+    echo "Cleared stale OpenEmu auto-save-state (forces a cold boot of the new ROM)."
+fi
+
 if [ -f "$LIB" ]; then
     cp -f "$ROM" "$LIB"
     echo "Updated OpenEmu copy: $LIB"

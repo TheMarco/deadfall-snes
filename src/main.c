@@ -49,6 +49,7 @@ static void scene_victory(void) {
 
 int main(void) {
     u8 scene = SC_TITLE;
+    u16 pad_prev = 0;    /* for manual edge detection (see below) */
 
     audio_init();        /* spcBoot - must run before consoleInit enables NMI */
     render_init();
@@ -56,7 +57,15 @@ int main(void) {
     scene_title();
 
     while (1) {
-        u16 down = padsDown(0);
+        /* Edge-detect newly-pressed keys from the CURRENT pad state. We do NOT
+         * use padsDown()/pad_keysdown[] here: this PVSnesLib build's auto-joypad
+         * ISR updates pad_keys[] (padsCurrent works -- the gameplay loop relies on
+         * it) but does not reliably maintain pad_keysdown[], so padsDown() stayed
+         * 0 and "PRESS START" never fired (the bug was hidden while OpenEmu kept
+         * auto-resuming a save state past the title). */
+        u16 cur  = padsCurrent(0);
+        u16 down = (u16)(cur & ~pad_prev);
+        pad_prev = cur;
 
         switch (scene) {
             case SC_TITLE:
