@@ -11,8 +11,8 @@
 
 /* Pre-multiplier base/min from GameBalance.js (650ms / 285ms),
  * then *1.4 -> frames:  650ms=39f, *1.4=55f ; 285ms=17f, *1.4=24f. */
-#define ENEMY_BASE_DELAY_FRAMES   55   /* level 1  */
-#define ENEMY_MIN_DELAY_FRAMES    24   /* level 10 */
+#define ENEMY_BASE_DELAY_FRAMES   37   /* level 1  (~1.5x faster; ratios vs player kept) */
+#define ENEMY_MIN_DELAY_FRAMES    16   /* level 10 (still slower than the player)        */
 
 /* Robot moves 1.5x slower than enemies (3/2). */
 #define ROBOT_SPEED_NUM   3

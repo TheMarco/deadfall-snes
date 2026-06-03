@@ -60,11 +60,12 @@
 #define SCORE_ZAP_KILL      1000
 
 /* ---- Timing in frames @60fps  (round(ms / 16.667)) ---- */
-#define PLAYER_MOVE_FRAMES  13   /* 220ms per tile                       */
+#define PLAYER_MOVE_FRAMES  8    /* divides TILE_SIZE(16) -> exactly 2px/frame, no integer-
+                                  * division stepping; ~1.6x faster than the 220ms original */
 #define ANIM_BOB_FRAMES     12   /* 200ms bob toggle                     */
 #define GRAVITY_STEP_FRAMES 6    /* 100ms per animated fall step         */
-#define MINE_REPEAT_FRAMES  21   /* 350ms repeat-mine delay              */
-#define PUSH_DELAY_FRAMES   24   /* 400ms hold before a push executes     */
+#define MINE_REPEAT_FRAMES  14   /* snappier repeat-mine                 */
+#define PUSH_DELAY_FRAMES   16   /* snappier push                        */
 #define CRUSH_SAFETY_FRAMES 30   /* 500ms block on moving into a just-mined cell */
 #define DEATH_ANIM_FRAMES   7    /* 120ms per death frame (5 frames)     */
 #define DEATH_ANIM_COUNT    5

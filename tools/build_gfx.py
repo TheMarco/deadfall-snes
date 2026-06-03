@@ -217,8 +217,9 @@ def colorize_gem(img, hue_deg):
             if a[y, x, 3] < 128:
                 continue
             g = float(a[y, x, :3].mean()) / 255.0
-            s = 0.95 * (1.0 - g * g * 0.85)       # highlights desaturate toward white
-            v = 0.07 + 0.93 * g                    # keep the gem's full contrast (deep shadows)
+            gc = min(1.0, max(0.0, 0.5 + (g - 0.5) * 1.38))   # S-stretch -> more contrast
+            s = 0.98 * (1.0 - gc * gc * 0.40)      # stay saturated even in highlights (vibrance)
+            v = 0.04 + 0.96 * gc                    # deep shadows, bright highlights
             r, gg, b = colorsys.hsv_to_rgb(h, s, v)
             out[y, x, 0] = int(r * 255); out[y, x, 1] = int(gg * 255); out[y, x, 2] = int(b * 255)
     return Image.fromarray(out, "RGBA")
