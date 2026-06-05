@@ -6,6 +6,7 @@ src/*.ps
 res/soundbank.asm
 res/soundbank.h
 res/soundbank.bnk
+include/soundbank_banks.h
 linkfile
 .pvsneslib_home
 

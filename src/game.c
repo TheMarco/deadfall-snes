@@ -353,6 +353,7 @@ static void gem_fall_damage(u8 gx, u8 gy) {
         if (!game.portal_active && game.gems_collected >= game.total_gems) {
             game.portal_active = 1;
             game.alarm_active = 1;
+            audio_music_frantic();          /* swap to the portal/alarm theme */
             audio_sfx(SFX_PORTAL);
         } else {
             audio_sfx(SFX_COLLECT);
@@ -518,9 +519,10 @@ static void do_mine(s8 dx, s8 dy) {
         base_mt = MT_GEM_CRUSH;
         game.gems_collected++;
         game.score += SCORE_GEM;
-        if (game.gems_collected >= game.total_gems) {
+        if (!game.portal_active && game.gems_collected >= game.total_gems) {
             game.portal_active = 1;
             game.alarm_active = 1;
+            audio_music_frantic();          /* swap to the portal/alarm theme */
             audio_sfx(SFX_PORTAL);          /* exit opens */
         } else {
             audio_sfx(SFX_COLLECT);
@@ -882,6 +884,7 @@ void game_update(void) {
                 if (!game.portal_active && game.gems_collected >= game.total_gems) {
                     game.portal_active = 1;
                     game.alarm_active = 1;
+                    audio_music_frantic();      /* swap to the portal/alarm theme */
                     audio_sfx(SFX_PORTAL);
                 }
                 check_section_cleared();

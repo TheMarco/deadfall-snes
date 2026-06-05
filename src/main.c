@@ -150,7 +150,7 @@ int main(void) {
             case SC_PLAY:
                 game_update();
                 if (game.is_game_over || game.is_victory) game.alarm_active = 0;  /* stop the vignette */
-                if (game.is_game_over)   { audio_stop(); scene = SC_GAMEOVER; scene_gameover(); }
+                if (game.is_game_over)   { audio_music_gameover(); scene = SC_GAMEOVER; scene_gameover(); }
                 else if (game.is_victory){ audio_music_credits(); scene = SC_VICTORY;
                                            cr_stage = 0; cr_timer = CREDITS_DWELL; scene_credits(0); }
                 break;

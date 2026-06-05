@@ -7,20 +7,32 @@
  * at their natural rate. */
 #include <snes.h>
 #include "audio.h"
+#include "config.h"          /* MAX_LEVELS */
 #include "res/soundbank.h"
+/* The soundbank spans several 32KB ROM banks (SOUNDBANK__0..); the count varies
+ * with the music set, so the exact list of banks to register is auto-generated
+ * from soundbank.asm into this header each build (tools/gen_soundbank_banks.py).
+ * EVERY spanned bank must be registered: a missing one => link error, an
+ * unregistered one => the linker discards it and its modules go silent. */
+#include "soundbank_banks.h"    /* SPC_SET_ALL_BANKS() (generated) */
 
-/* LoROM 32KB banks: the ~46KB soundbank spans two banks -> register both,
- * reverse order (see PVSnesLib musicGreaterThan32k example). */
-extern char SOUNDBANK__0, SOUNDBANK__1;
+/* One-shot tracking: snesmod loops every module, so to play one ONCE we watch the
+ * pattern position climb then drop (the loop wrap) and stop there (audio_process).
+ * WRAM isn't zeroed at boot here, so these MUST be cleared in audio_init -- else a
+ * garbage music_once would make audio_process poll spcGetMusicPosition before any
+ * module plays. */
+static u8 music_once = 0;
+static u8 once_peak = 0;
 
 void audio_init(void) {
+    music_once = 0;                 /* statics aren't zero-initialised at boot */
+    once_peak = 0;
     spcBoot();                      /* boot sm-spc onto the SPC700 (once) */
 }
 
 void audio_load(void) {
     u8 i;
-    spcSetBank(&SOUNDBANK__1);
-    spcSetBank(&SOUNDBANK__0);
+    SPC_SET_ALL_BANKS();            /* register every soundbank ROM bank */
     spcStop();
     spcLoad(MOD_SFX);               /* the effects bank module */
     for (i = 0; i < SFX_COUNT; i++)
@@ -31,24 +43,59 @@ void audio_sfx(u8 idx) {
     spcEffect(2, idx, 15 * 16 + 8); /* pitch=2 (8kHz), vol=15, pan=centre */
 }
 
+/* Music playback volume (0..255). Lowered so music sits UNDER the SFX (which play
+ * at full volume via spcEffect); raise/lower to taste. */
+#define MUSIC_VOLUME 64
+
 /* Switch the playing module. spcLoad re-inits ARAM, so the effect samples must
  * be reloaded afterwards. Blocking + slowish - call during level transitions. */
 void audio_play_music(u8 module) {
     u8 i;
+    music_once = 0;                 /* default: loop (cleared for every track but gameover) */
     spcStop();
     spcLoad(module);
     for (i = 0; i < SFX_COUNT; i++) spcLoadEffect(i);
     spcPlay(0);
+    spcSetModuleVolume(MUSIC_VOLUME);   /* duck music below the SFX */
 }
 
-/* All music points at the test.mid module for now (faithfulness proof). When
- * real per-level modules are chosen, map level -> its module here. */
-void audio_music_level(u8 level) { (void)level; audio_play_music(MOD_MUSIC_TEST); }
-void audio_music_frantic(void)   { audio_play_music(MOD_MUSIC_TEST); }
-void audio_music_credits(void)   { audio_play_music(MOD_MUSIC_TEST); }
+/* Per-level themes: the 12 songs/*.zip AddmusicK scores rebuilt as snesmod
+ * chiptunes (tools/build_songs.py). Indexed by level 1..10; the order matches
+ * MUSICFILES in the Makefile, which fixes these MOD_* indices. */
+static const u8 level_module[MAX_LEVELS] = {
+    MOD_MUSIC_LEVEL1, MOD_MUSIC_LEVEL2, MOD_MUSIC_LEVEL3,  MOD_MUSIC_LEVEL4,
+    MOD_MUSIC_LEVEL5, MOD_MUSIC_LEVEL6, MOD_MUSIC_LEVEL7,  MOD_MUSIC_LEVEL8,
+    MOD_MUSIC_LEVEL9, MOD_MUSIC_LEVEL10,
+};
 
-void audio_stop(void) { spcStop(); }
+void audio_music_level(u8 level) {
+    if (level < 1) level = 1;
+    if (level > MAX_LEVELS) level = MAX_LEVELS;
+    audio_play_music(level_module[level - 1]);
+}
+
+/* All gems collected / exit open: the tense "Fatal Chase" portal theme. */
+void audio_music_frantic(void)  { audio_play_music(MOD_MUSIC_PORTAL); }
+/* Victory/credits reuses the triumphant "Golden Anthem" (level 10). */
+void audio_music_credits(void)  { audio_play_music(MOD_MUSIC_LEVEL10); }
+/* Game over: play the jingle exactly ONCE, then silence (don't loop). */
+void audio_music_gameover(void) {
+    audio_play_music(MOD_MUSIC_GAMEOVER);
+    music_once = 1;
+    once_peak = 0;
+}
+
+void audio_stop(void) { music_once = 0; spcStop(); }
 
 void audio_process(void) {
+    if (music_once) {               /* stop a one-shot track once its pattern wraps */
+        u8 pos = spcGetMusicPosition();
+        if (pos < 64) {             /* ignore implausible readings */
+            if (pos > once_peak) once_peak = pos;             /* advancing */
+            else if (once_peak && pos < once_peak) {          /* looped back -> stop */
+                spcStop(); music_once = 0;
+            }
+        }
+    }
     spcProcess();                   /* feed the sound engine each frame */
 }

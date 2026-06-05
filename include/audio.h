@@ -11,8 +11,9 @@ void audio_sfx(u8 idx);     /* trigger a sound effect (SFX_* index)       */
 void audio_process(void);   /* pump the sound engine - call every frame   */
 void audio_play_music(u8 module);  /* load+play a module (reloads effects) */
 void audio_music_level(u8 level);  /* play level n's theme (n=1..10)        */
-void audio_music_frantic(void);    /* alarm theme (all gems collected)      */
+void audio_music_frantic(void);    /* portal theme (all gems collected)     */
 void audio_music_credits(void);    /* victory/credits theme                 */
+void audio_music_gameover(void);   /* game-over theme                       */
 void audio_stop(void);             /* stop music (effects stay playable)    */
 
 #endif /* AUDIO_H */

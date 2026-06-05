@@ -136,6 +136,11 @@ static const u8 hud_halfbar_tile[16] = {
  * WHITE current, GREEN cleared. A 4x4 grid of 3x3 filled cells. Built into a 4bpp
  * sprite, DMA'd in vblank; OBJ palette 4 freed by sharing the zap palette. */
 #define HUD_BG3_VOFS 2                   /* nudge the whole BG3 (HUD + text) layer up 2px */
+/* SNES OBJ render one scanline below BG at the same Y; raise entity sprites 1px so
+ * they line up with the block/boulder tilemap instead of overlapping the cell
+ * below by 1px (visible on the player/enemy bob). Applies to grid-aligned OBJs
+ * only (player/enemy/robot/zap/falls), not the HUD minimap/sparkles. */
+#define OBJ_Y_FIX 1
 #define MM_COL    30                     /* bg3map cols 30-31 left transparent for the OBJ */
 #define MM_OBJ_X  240                    /* screen x of the 16x16 minimap sprite (top-right) */
 #define MM_OBJ_Y  0
@@ -157,6 +162,7 @@ static u16 mm_blink;                     /* phase counter */
 static u8  mm_dirty = 0;                  /* tiles changed -> DMA in render_flush_map (boot-safe) */
 static u32 mm_sig = 0xFFFFFFFF;          /* last-drawn signature (skip rebuild if same) */
 static u8  mm_last_cur = 0xFF;            /* last current-section index (gate the sig rebuild) */
+static u8  mm_last_blink = 0xFF;          /* last portal-blink phase (force rebuild on toggle) */
 
 /* 32x32 tilemap buffers (entry = tile number | palette<<10 | flips). */
 static u16 bg1map[32 * 32];
@@ -443,7 +449,7 @@ void render_slide_player(u16 cam) {
         case DIR_UP:    col = 5; break;
         default:        col = 6; break;
     }
-    oamSet(0, (u16)psx, (u16)psy,
+    oamSet(0, (u16)psx, (u16)(psy - OBJ_Y_FIX),
            3, 0, 0, (u16)(p->anim_frame * 32 + col * 2), OBJPAL_PLAYER);
     oamSetEx(0, OBJ_SMALL, OBJ_SHOW);
 }
@@ -825,11 +831,13 @@ void render_player(void) {
     u8 col;
 
     sx = (u16)(PLAYFIELD_OFFSET_X + p->pixel_x);
-    sy = (u16)(PLAYFIELD_OFFSET_Y + p->pixel_y);
+    sy = (u16)(PLAYFIELD_OFFSET_Y + p->pixel_y - OBJ_Y_FIX);
 
     if (game.death_pending) {         /* death animation plays at the death spot */
         u8 fr = (u8)((DEATH_SEQ_FRAMES - game.death_timer) / DEATH_ANIM_FRAMES);
-        if (fr >= DEATH_ANIM_COUNT) fr = (u8)(DEATH_ANIM_COUNT - 1);
+        /* after the last sprite frame, clear the player (empty) for the tail
+         * instead of freezing on the final frame */
+        if (fr >= DEATH_ANIM_COUNT) { oamSetVisible(0, OBJ_HIDE); return; }
         oamSet(0, sx, sy, 3, 0, 0, (u16)(OBJN_PDEATH + fr * 2), OBJPAL_PDEATH);
         oamSetEx(0, OBJ_SMALL, OBJ_SHOW);
         return;
@@ -856,7 +864,7 @@ void render_fall(u8 slot, u8 type, u16 px, u16 py, u8 dmg) {
                (type == TILE_EXTRA_LIFE) ? OBJN_ELIFE_FALL   :
                (u16)(OBJN_GEM_FALL + (dmg > 2 ? 2 : dmg) * 2);   /* gem: show its damage frame */
     u16 id = (u16)((OAM_FALL_BASE + slot) * 4);   /* oam id is sprite*4 (byte offset) */
-    oamSet(id, px, py, 3, 0, 0, name, OBJPAL_FALLS);
+    oamSet(id, px, (u16)(py - OBJ_Y_FIX), 3, 0, 0, name, OBJPAL_FALLS);
     oamSetEx(id, OBJ_SMALL, OBJ_SHOW);
 }
 
@@ -875,13 +883,13 @@ void render_enemies(void) {
                        e->section_row == game.cur_row && e->section_col == game.cur_col);
         if (here && e->alive) {
             u16 sx = (u16)(PLAYFIELD_OFFSET_X + e->pixel_x);
-            u16 sy = (u16)(PLAYFIELD_OFFSET_Y + e->pixel_y);
+            u16 sy = (u16)(PLAYFIELD_OFFSET_Y + e->pixel_y - OBJ_Y_FIX);
             u16 gfx = (u16)(OBJN_ENEMY + e->anim_frame * 32 + e->direction * 2);
             oamSet(id, sx, sy, 3, 0, 0, gfx, OBJPAL_ENEMY);
             oamSetEx(id, OBJ_SMALL, OBJ_SHOW);
         } else if (here && e->dying) {
             u16 sx = (u16)(PLAYFIELD_OFFSET_X + e->pixel_x);
-            u16 sy = (u16)(PLAYFIELD_OFFSET_Y + e->pixel_y);
+            u16 sy = (u16)(PLAYFIELD_OFFSET_Y + e->pixel_y - OBJ_Y_FIX);
             u8 fr = (u8)((DEATH_ANIM_FRAMES * DEATH_ANIM_COUNT - e->death_timer) / DEATH_ANIM_FRAMES);
             if (fr >= DEATH_ANIM_COUNT) fr = (u8)(DEATH_ANIM_COUNT - 1);
             oamSet(id, sx, sy, 3, 0, 0, (u16)(OBJN_EDEATH + fr * 2), OBJPAL_EDEATH);
@@ -899,7 +907,7 @@ void render_robot(void) {
     if (game.robot_count > 0 && r->alive &&
         r->section_row == game.cur_row && r->section_col == game.cur_col) {
         u16 sx = (u16)(PLAYFIELD_OFFSET_X + r->pixel_x);
-        u16 sy = (u16)(PLAYFIELD_OFFSET_Y + r->pixel_y);
+        u16 sy = (u16)(PLAYFIELD_OFFSET_Y + r->pixel_y - OBJ_Y_FIX);
         u16 gfx = (u16)(OBJN_ROBOT + eyeseq[r->eye_index & 3] * 32 + r->direction * 2);
         oamSet(id, sx, sy, 3, 0, 0, gfx, OBJPAL_ROBOT);
         oamSetEx(id, OBJ_SMALL, OBJ_SHOW);
@@ -932,7 +940,7 @@ void render_lightning(void) {
         s16 by = (s16)(r->pixel_y + dy * TILE_SIZE * (k + 1));
         u16 id = (u16)((OAM_ZAP_BASE + k) * 4);
         gfx = (u16)(base + (L >> 3) * 32 + (L & 7) * 2);  /* unpack tile index */
-        oamSet(id, (u16)(PLAYFIELD_OFFSET_X + bx), (u16)(PLAYFIELD_OFFSET_Y + by),
+        oamSet(id, (u16)(PLAYFIELD_OFFSET_X + bx), (u16)(PLAYFIELD_OFFSET_Y + by - OBJ_Y_FIX),
                2, 0, 0, gfx, pal);
         oamSetEx(id, OBJ_SMALL, OBJ_SHOW);
     }
@@ -1012,7 +1020,7 @@ void render_minimap(void) {
     u8  nsec = (u8)(game.world_rows * game.world_cols);
     u8  cur  = world_section_index(game.cur_row, game.cur_col);
     u32 sig;
-    u8  r, c, idx, x, y, tx, ty, scanned = 0;
+    u8  r, c, idx, x, y, tx, ty, scanned = 0, blink;
 
     mm_blink++;
 
@@ -1038,14 +1046,18 @@ void render_minimap(void) {
      * when the current section changed. On the other ~3/4 frames it is identical
      * to last frame, so skip the 16-iteration rebuild (which costs a per-section
      * world_section_index multiply + a 32-bit variable shift each). */
-    if (!scanned && cur == mm_last_cur) return;
+    /* once everything's cleared (portal open), blink the exit's section ~3.75Hz */
+    blink = game.portal_active ? (u8)((mm_blink >> 4) & 1) : 0;
+    if (!scanned && cur == mm_last_cur && blink == mm_last_blink) return;
     mm_last_cur = cur;
+    mm_last_blink = blink;
 
     sig = 0;
     for (r = 0; r < game.world_rows; r++)
         for (c = 0; c < game.world_cols; c++)
             if (mm_has_gems[world_section_index(r, c)]) sig |= (u32)(1UL << (r * 4 + c));
     sig = (sig << 4) | cur;
+    sig = (sig << 1) | blink;          /* rebuild when the blink toggles */
     if (sig == mm_sig) return;
     mm_sig = sig;
 
@@ -1066,6 +1078,9 @@ void render_minimap(void) {
                 idx = world_section_index(r, c);
                 col = (idx == cur) ? 4 : mm_has_gems[idx] ? 3 : 5;  /* white / light-grey / green */
             }
+            /* exit section blinks white <-> off once the portal is open */
+            if (game.portal_active && r == game.portal_row && c == game.portal_col)
+                col = blink ? 4 : 1;
             for (dy = 0; dy < MM_DOT; dy++)
                 for (dx = 0; dx < MM_DOT; dx++) mm_px[sy + dy][sx + dx] = col;
         }

@@ -30,6 +30,8 @@ C5_SPEED = int(round(WAVE_LEN * C5_HZ))
 DRATE = 16000                         # drum-sample rate
 ROWS_PER_PAT = 64
 R = 8                                 # rows per quarter note (32nd-note grid)
+TARGET_BPM = 130                      # force every track to this tempo (the user's sweet
+                                      # spot); set to None to keep each MIDI's own tempo
 NOTE_OFF = 255                        # IT "===" -> release the instrument envelope
 
 np.random.seed(1234)                  # deterministic drum noise
@@ -53,6 +55,7 @@ def parse_midi(path):
                 break
         return v, p
 
+    maxtick = 0                       # song length (longest track end) for tight looping
     while pos < len(d) and d[pos:pos + 4] == b"MTrk":
         tlen = struct.unpack(">I", d[pos + 4:pos + 8])[0]
         p = pos + 8; tend = p + tlen
@@ -94,7 +97,9 @@ def parse_midi(path):
             else:
                 p += 1
         pos = tend
-    return div, tempo, progs, notes
+        if t > maxtick:
+            maxtick = t
+    return div, tempo, progs, notes, maxtick
 
 
 # ----------------------------------------------------------------- synthesis --
@@ -202,8 +207,11 @@ def build_events(div, notes):
     return tpr, ev
 
 
-def to_patterns(ev):
-    """Flatten per-channel events into global rows -> IT patterns + order list."""
+def to_patterns(ev, loop_rows=None):
+    """Flatten per-channel events into global rows -> IT patterns + order list.
+    loop_rows = the song's true length (from the MIDI) so the module ends exactly
+    there and loops seamlessly, instead of padding the last pattern out to a full
+    64 rows (which plays as a silent gap at the loop seam)."""
     glob = {}
 
     def put(r, itc, note, ins, vol):
@@ -231,17 +239,26 @@ def to_patterns(ev):
     if not glob:
         return [(ROWS_PER_PAT, {})], [0]
     maxrow = max(glob) + 1
-    npat = (maxrow + ROWS_PER_PAT - 1) // ROWS_PER_PAT
+    # loop length = the MIDI's own length (the composer's loop boundary). It's
+    # normally ~1 row under maxrow because a note-off lands exactly on the boundary
+    # -- use it anyway (the loop restart retriggers, so dropping that boundary
+    # note-off is seamless). Fall back to maxrow only if loop_rows is clearly bad.
+    # Never pad to a full final pattern -- the leftover rows are the silent gap.
+    total = loop_rows if (loop_rows and loop_rows >= maxrow - 2) else maxrow
+    npat = (total + ROWS_PER_PAT - 1) // ROWS_PER_PAT
     patterns = []
     for pi in range(npat):
         base = pi * ROWS_PER_PAT
+        rows = min(ROWS_PER_PAT, total - base)   # last pattern trimmed to fit
+        if rows <= 0:
+            break
         chrows = {}
-        for r in range(ROWS_PER_PAT):
+        for r in range(rows):
             evs = glob.get(base + r)
             if evs:
                 chrows[r] = evs
-        patterns.append((ROWS_PER_PAT, chrows))
-    return patterns, list(range(npat))
+        patterns.append((rows, chrows))
+    return patterns, list(range(len(patterns)))
 
 
 # ------------------------------------------------------------- WAV preview ---
@@ -291,23 +308,29 @@ def render_wav(path, samples, ev, it_tempo, speed=6, out_rate=32000):
 def main():
     src = sys.argv[1] if len(sys.argv) > 1 else "test.mid"
     name = sys.argv[2] if len(sys.argv) > 2 else os.path.splitext(os.path.basename(src))[0]
-    div, tempo, progs, notes = parse_midi(src)
-    bpm = round(60_000_000 / tempo)
-    it_tempo = max(32, min(255, round(R * bpm / 4)))
+    div, tempo, progs, notes, maxtick = parse_midi(src)
+    midi_bpm = round(60_000_000 / tempo)
+    bpm = TARGET_BPM if TARGET_BPM else midi_bpm
+    # speed=3 (not 6): with R=8 rows/quarter, IT tempo == BPM, so songs up to
+    # 255bpm play at their real tempo. speed=6 made tempo=2*bpm, clamping anything
+    # over 127bpm (e.g. a 170bpm track) down to 127 -- audibly too slow.
+    it_speed = 3
+    it_tempo = max(32, min(255, bpm))
 
     tpr, ev = build_events(div, notes)
     counts = {c: len(ev[c]) for c in range(8) if ev[c]}
-    patterns, orders = to_patterns(ev)
+    loop_rows = int(round(maxtick / tpr)) if maxtick else None   # seamless loop length
+    patterns, orders = to_patterns(ev, loop_rows)
     smps = instruments()
 
     it_path = os.path.join(RES, f"music_{name}.it")
     size = write_it(it_path, f"DEADFALL {name.upper()}", smps,
                     patterns=patterns, orders=orders,
-                    channels=8, speed=6, tempo=it_tempo)
+                    channels=8, speed=it_speed, tempo=it_tempo)
     wav_path = os.path.join(RES, f"{name}_preview.wav")
-    render_wav(wav_path, smps, ev, it_tempo)
+    render_wav(wav_path, smps, ev, it_tempo, speed=it_speed)
 
-    print(f"src={src}  {bpm}bpm -> IT tempo {it_tempo}/speed6  ({R} rows/quarter, {tpr} ticks/row)")
+    print(f"src={src}  midi {midi_bpm}bpm -> {bpm}bpm / IT tempo {it_tempo}/speed{it_speed}  ({R} rows/quarter, {tpr} ticks/row)")
     print(f"IT channels (events): {counts}")
     print(f"{len(patterns)} patterns x {ROWS_PER_PAT} rows, {len(orders)} orders")
     print(f"wrote {it_path} ({size} bytes)")

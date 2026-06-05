@@ -84,7 +84,20 @@ def quantize_keep0(img, ncolors=16):
 #       colors at 3..15 (the HUD font never uses 2bpp index 3, so CGRAM 19 is ours).
 # We emit .pic/.pal directly (gfx2snes makes only one palette per image), matching
 # the gs16 layout render.c expects: metatile N -> 8x8 tiles N*4..N*4+3 (TL,TR,BL,BR).
-PAL0_SUBGROUPS = [([1, 2, 3, 7], 10), ([4, 5, 6], 5)]   # (block+boulder, gem); +transp = 16
+# (metatiles, color budget, reserved colors). The gem reserves a pure WHITE so
+# its specular highlight + the moving sparkle-star frames have a true-white target
+# to map onto (otherwise median-cut spends all 5 slots on the hue and the shimmer
+# flattens to a faint tint). +transp = 16.
+# block+boulder: 10 median colours, NO reserved white (their highlights are tinted
+# near-white, not pure). gem: reserve pure WHITE for the sparkle stars + 4 body.
+# Block and boulder get SEPARATE colour budgets (5 each) -- they used to share 10,
+# but now that the block is a saturated accent and the boulder is its own natural
+# gray, a shared median-cut spent the budget on the block's colours and TINTED the
+# gray boulder (e.g. a pink boulder on a magenta level). Splitting keeps the
+# boulder's grays its own. gem: reserve pure WHITE for the sparkle + 4 body.
+# block reserves a neutral NEAR-BLACK so the crisp bevel's bottom/right shadow maps
+# to true near-black on every hue (not idx0, which is transparent on a BG layer).
+PAL0_SUBGROUPS = [([1, 2, 3], 5, [(18, 18, 20)]), ([7], 5, []), ([4, 5, 6], 5, [(255, 255, 255)])]
 # pal1 also budgeted: the blue markers dominate by pixel count, so the lone GOLD
 # extra-life star gets a reserved share or it nearest-maps to silver.
 # spawn-glow frame 2 (mt20) joins the spawn group; extra-life anim frames (mt21-23)
@@ -119,22 +132,10 @@ def bgr555(c):
     return r | (g << 5) | (b << 10)
 
 
-# Per-level look matches the original (GameScene.js): the gem is a different
-# sprite per level (gem-<level>.png), the boulder a different frame of
-# iron-sprite.png (frame = level-1), and the block is tinted by a per-level
-# multiply colour (GameScene.js blockTints[]).
-BLOCK_TINTS = [
-    0xB0B0D0,  # L1  cool blue-gray
-    0xD0B0B0,  # L2  warm red-gray
-    0xB0D0B0,  # L3  cool green-gray
-    0xD0D0B0,  # L4  warm yellow-gray
-    0xC0B0D0,  # L5  purple-gray
-    0xB0D0D0,  # L6  cyan-gray
-    0xD0C0B0,  # L7  orange-gray
-    0xB0C0D0,  # L8  sky blue-gray
-    0xD0B0C0,  # L9  pink-gray
-    0xC0D0B0,  # L10 lime-gray
-]
+# Per-level gem/block/boulder colour is now derived from each level's background
+# (see ACCENT_HUES + colorize_obj below): all three are recoloured to one accent
+# hue that contrasts the backdrop, with deep-shadow/white-highlight pop. (This
+# supersedes the old per-level block multiply-tint + pre-coloured boulder frame.)
 
 
 def apply_tint(img, tint):
@@ -179,35 +180,75 @@ def shade_vertical(img, top=1.08, bot=0.5):
     return Image.fromarray(a.astype(np.uint8), "RGBA")
 
 
-def bevel(img, hi=42, lo=56):
+def bevel(img, hi=42, lo=56, crisp=False):
     """Top-left-lit bevel for depth: brighten the top/left-facing edges of the
     opaque shape and darken the bottom/right-facing edges (light from top-left).
     Shape-aware -- edges come from the alpha mask, so it follows a gem's facets or
-    a block's square, not just the tile border."""
+    a block's square, not just the tile border.
+
+    crisp=True (blocks): instead of adding/subtracting a flat amount (which on a
+    bright/warm hue leaves the 'shadow' as dark brown, not black), blend the
+    top/left edge toward WHITE and MULTIPLY the bottom/right edge down toward
+    near-black -- so every block gets the same hard light/dark bevel regardless of
+    its hue."""
     a = np.array(img.convert("RGBA"))
-    rgb = a[:, :, :3].astype(np.int16)
+    rgb = a[:, :, :3].astype(np.float32)
     op = a[:, :, 3] >= 128
     p = np.pad(op, 1, constant_values=False)
     above, left = p[0:16, 1:17], p[1:17, 0:16]
     below, right = p[2:18, 1:17], p[1:17, 2:18]
     hi_mask = op & (~above | ~left)        # top/left-facing edge -> highlight
     lo_mask = op & (~below | ~right) & ~hi_mask   # bottom/right-facing -> shadow
-    rgb[hi_mask] += hi
-    rgb[lo_mask] -= lo
+    if crisp:
+        # Single clean 1px bevel: light the top/left edge toward white and drive the
+        # bottom/right edge to NEAR-BLACK (multiply, not subtract) so it reads crisp
+        # on warm/bright hues too -- not the flat dark-brown the old subtract left.
+        # (A 2px band read as a double outline, so keep it to one ring.)
+        rgb[hi_mask] += (255.0 - rgb[hi_mask]) * 0.50   # top/left -> light
+        rgb[lo_mask] *= 0.13                            # bottom/right -> near-black
+    else:
+        rgb[hi_mask] += hi
+        rgb[lo_mask] -= lo
     a[:, :, :3] = np.clip(rgb, 0, 255).astype(np.uint8)
     return Image.fromarray(a, "RGBA")
 
 
-# Per-level gem hue (degrees) -- one grayscale gem (gem-fixed.png) recoloured per
-# level to a vivid colour that COMPLEMENTS each level's background (bg hues, in deg:
-# L1~332 L2~204 L3 gray L4~105 L5~254 L6~116 L7~5 L8~9 L9~28 L10~1).
-GEM_HUES = [165, 35, 275, 315, 70, 15, 195, 300, 225, 130]
+# Per-level ACCENT hue (degrees). Each is ~complementary to that level's washed
+# background dominant hue (computed from bg/bg*.png + test3.png, 35% gray wash),
+# so the foreground CONTRASTS the backdrop instead of blending into its tint; the
+# set is also spread out so no two levels read the same. Gem + block + boulder all
+# use the level's accent (vary by saturation/value, below), for a coherent but
+# high-contrast look. bg hues were ~ L1 316 L2 71 L3 gray L4 127 L5 247 L6 74
+# L7 9 L8 24 L9 26 L10 38.
+ACCENT_HUES = [165, 300, 35, 345, 55, 270, 195, 215, 160, 110]
+GEM_HUES = ACCENT_HUES                      # back-compat alias
+
+# Per-class colour so block / rock / gem are three DISTINCT materials (not one
+# tint), all keyed to the level's accent hue but separated by saturation + value:
+#   gem  = vivid jewel (high sat, full range, white sparkle)
+#   block= a brighter, lightly-tinted matte STONE (low sat) -> the diggable terrain
+#   rock = a darker NEAR-GRAY shiny stone (very low sat, hue nudged) -> immovable
+# `smin` = saturation floor at peak brightness: block/rock keep a tint (never pure
+# white); only the gem reaches smin=0, and only at its very brightest pixels (the
+# sparkle stars, ~1.0 vs facets ~0.92), so the sparkle is the one true white.
+# Rolloff is keyed to RAW luminance so that separation survives the contrast stretch.
+GEM_PARAMS   = dict(sat=0.30, vlo=0.05, vhi=1.00, hl=0.62, hlpow=2.6, contrast=1.5, smin=0.0)
+BLOCK_PARAMS = dict(sat=0.28, vlo=0.18, vhi=1.00, hl=0.50, hlpow=1.4, contrast=1.8, smin=0.12)
+ROCK_PARAMS  = dict(sat=0.15, vlo=0.06, vhi=0.82, hl=0.50, hlpow=1.4, contrast=1.6, smin=0.10)
+BLOCK_HUE_OFFSET = 90       # block hue = gem hue + 90 -> a DIFFERENT contrasting tint
+                            # from the gem (not just a duller shade of the same colour),
+                            # still ~90deg off the bg so it keeps contrast.
+ROCK_HUE_OFFSET = 30        # (unused: boulders currently use their natural frame)
 
 
-def colorize_gem(img, hue_deg):
-    """Map the GRAYSCALE gem (gem-fixed.png) to a coloured gem: fixed hue, saturation
-    that eases off toward highlights (so they read bright/near-white like a real gem),
-    value from the source luminance. Alpha preserved."""
+def colorize_obj(img, hue_deg, sat=0.97, vlo=0.05, vhi=1.0, hl=0.62, hlpow=2.6,
+                 contrast=1.5, smin=0.0):
+    """Recolour a GRAYSCALE sprite to one hue while keeping real light/dark range:
+    value follows source luminance (deep shadow -> bright); saturation rolls from
+    `sat` down toward `smin` above `hl` brightness so highlights read as a glint.
+    smin=0 lets the very brightest pixels hit pure white (the gem sparkle); smin>0
+    keeps a tint in the highlight (block/boulder). Rolloff uses RAW luminance so a
+    contrast stretch can't collapse the facet/sparkle distinction. Alpha kept."""
     import colorsys
     a = np.array(img.convert("RGBA"))
     out = a.copy()
@@ -217,20 +258,35 @@ def colorize_gem(img, hue_deg):
             if a[y, x, 3] < 128:
                 continue
             g = float(a[y, x, :3].mean()) / 255.0
-            gc = min(1.0, max(0.0, 0.5 + (g - 0.5) * 1.38))   # S-stretch -> more contrast
-            s = 0.98 * (1.0 - gc * gc * 0.40)      # stay saturated even in highlights (vibrance)
-            v = 0.04 + 0.96 * gc                    # deep shadows, bright highlights
+            gc = min(1.0, max(0.0, 0.5 + (g - 0.5) * contrast))
+            v = vlo + (vhi - vlo) * gc
+            t = min(1.0, max(0.0, (g - hl) / (1.0 - hl)))      # rolloff on RAW lum
+            s = smin + (sat - smin) * (1.0 - t ** hlpow)
             r, gg, b = colorsys.hsv_to_rgb(h, s, v)
             out[y, x, 0] = int(r * 255); out[y, x, 1] = int(gg * 255); out[y, x, 2] = int(b * 255)
     return Image.fromarray(out, "RGBA")
 
 
-def gameplay_tiles(gem_img, iron_col=0, block_tint=None):
+def colorize_gem(img, hue_deg):
+    return colorize_obj(img, hue_deg, **GEM_PARAMS)
+
+
+def boulder_master():
+    """One clean grayscale boulder to recolour per level (the iron-sprite frames
+    are an inconsistent set of pre-coloured rocks). Frame 1 has a good round shape
+    + diagonal specular; desaturate it to luminance."""
+    iron = load("iron-sprite.png")
+    bm = np.array(frame(iron, 1, 0).convert("RGBA"))
+    lum = (bm[:, :, :3] @ np.array([0.299, 0.587, 0.114])).astype(np.uint8)
+    bm[:, :, 0] = bm[:, :, 1] = bm[:, :, 2] = lum
+    return Image.fromarray(bm, "RGBA")
+
+
+def gameplay_tiles(gem_img, block_img, boulder_img):
     """The 16 gameplay metatiles as 16x16 RGBA images (index 0 = transparent).
-    gem_img = an already-loaded (and colourised) gem sheet."""
-    block = load("block.png");  gem = gem_img;  iron = load("iron-sprite.png")
-    if block_tint is not None:
-        block = apply_tint(block, block_tint)
+    gem_img / block_img / boulder_img = already-colourised per-level sheets
+    (block_img is the 5-frame block sheet; boulder_img a single 16x16 rock)."""
+    block = block_img;  gem = gem_img;  iron = boulder_img
     portal = load("portal.png"); spawn = load("spawn-point.png")
     rspawn = load("robot-spawn-point.png"); elife = load("extralife.png")
     tiles = [None] * 28
@@ -239,7 +295,7 @@ def gameplay_tiles(gem_img, iron_col=0, block_tint=None):
     # original's static damage; the shatter frames 3,4 are the crush animation.
     tiles[1] = frame(block, 0, 0); tiles[2] = frame(block, 1, 0); tiles[3] = frame(block, 2, 0)
     tiles[4] = frame(gem, 0, 0);   tiles[5] = frame(gem, 1, 0);   tiles[6] = frame(gem, 2, 0)
-    tiles[7] = frame(iron, iron_col, 0)
+    tiles[7] = frame(iron, 0, 0)
     tiles[8] = frame(portal, 0, 0); tiles[9] = frame(portal, 2, 0)
     tiles[10] = frame(portal, 4, 0); tiles[11] = frame(portal, 6, 0)
     tiles[12] = frame(spawn, 0, 0); tiles[13] = frame(spawn, 1, 0)
@@ -256,7 +312,9 @@ def gameplay_tiles(gem_img, iron_col=0, block_tint=None):
     tiles[26] = frame(gem, 2, 1); tiles[27] = frame(gem, 3, 1)
     for i in range(1, 28):              # all game objects + shatter pop vs the faded bg
         tiles[i] = boost(tiles[i])
-    for i in (1, 2, 3, 4, 5, 6, 7):     # block, gem, boulder get the depth bevel (not shatter)
+    for i in (1, 2, 3):                 # blocks: CRISP bevel (light top/left, near-black btm/right)
+        tiles[i] = bevel(tiles[i], crisp=True)
+    for i in (4, 5, 6, 7):              # gem + boulder: soft depth bevel
         tiles[i] = bevel(tiles[i])
     return tiles
 
@@ -295,8 +353,8 @@ def build_pal0(tiles):
     survive the many gray block pixels. Returns ({mt: idx}, [16 RGB])."""
     palette = [(0, 0, 0)]
     mts = []
-    for sub_mts, budget in PAL0_SUBGROUPS:
-        palette += _mediancut(tiles, sub_mts, budget)
+    for sub_mts, budget, reserved in PAL0_SUBGROUPS:
+        palette += list(reserved) + _mediancut(tiles, sub_mts, budget - len(reserved))
         mts += sub_mts
     palette = (palette + [(0, 0, 0)] * 16)[:16]
     mts += PAL0_CRUSH      # shatter frames: indexed against (not budgeted into) the palette
@@ -319,14 +377,19 @@ def build_pal1(tiles):
 def build_bg_tiles(level=1, out_base=None):
     """Write <out_base>.pic (64 4bpp tiles) + <out_base>.pal (32 BGR555 colors =
     pal0 then pal1) for the given level: per-level gem sprite (gem-<level>.png),
-    boulder frame (level-1), and block multiply-tint (BLOCK_TINTS[level-1]). The
+    boulder + block recoloured to ACCENT_HUES[level-1] (contrasts the bg). The
     marker tiles (pal1) are identical across levels. Default out_base = bg_tiles_<level>."""
     if out_base is None:
         out_base = "bg_tiles_%d" % level
-    gem_img = colorize_gem(Image.open(os.path.join(PROJ, "gem-fixed.png")).convert("RGBA"),
-                           GEM_HUES[level - 1])
-    tiles = gameplay_tiles(gem_img, iron_col=level - 1,
-                           block_tint=BLOCK_TINTS[level - 1])
+    hue = ACCENT_HUES[level - 1]
+    gem_img = colorize_obj(Image.open(os.path.join(PROJ, "gem-fixed.png")).convert("RGBA"),
+                           hue, **GEM_PARAMS)
+    block_img = colorize_obj(load("block.png"), hue + BLOCK_HUE_OFFSET, **BLOCK_PARAMS)
+    # Boulders keep their OWN natural look (the per-level iron-sprite frame), NOT
+    # the level accent -- so they read as a distinct material from the stone blocks.
+    # (colorize_obj + ROCK_PARAMS kept around for a future "interesting" boulder tint.)
+    boulder_img = frame(load("iron-sprite.png"), level - 1, 0)
+    tiles = gameplay_tiles(gem_img, block_img, boulder_img)
     tiles[0] = Image.new("RGBA", (16, 16), (0, 0, 0, 0))   # ensure empty stays transparent
     g0, pal0 = build_pal0(tiles)
     g1, pal1 = build_pal1(tiles)
@@ -466,12 +529,12 @@ def main():
     iron = load("iron-sprite.png"); elife = load("extralife.png")
     gemsrc = Image.open(os.path.join(PROJ, "gem-fixed.png")).convert("RGBA")
     for lvl in range(1, 11):
-        gem = colorize_gem(gemsrc, GEM_HUES[lvl - 1])
+        gem = colorize_obj(gemsrc, ACCENT_HUES[lvl - 1], **GEM_PARAMS)
         falls = Image.new("RGBA", (80, 16), (0, 0, 0, 0))
         falls.paste(frame(gem, 0, 0), (0, 0))                 # gem damage 0 (intact)
         falls.paste(frame(gem, 1, 0), (16, 0))                # gem damage 1 (cracked)
         falls.paste(frame(gem, 2, 0), (32, 0))                # gem damage 2 (more cracked)
-        falls.paste(frame(iron, lvl - 1, 0), (48, 0))         # boulder (per-level frame, like BG)
+        falls.paste(frame(iron, lvl - 1, 0), (48, 0))         # boulder: own natural frame (untinted)
         falls.paste(frame(elife, 0, 0), (64, 0))
         build_obj(falls, "spr_falls_%d" % lvl, do_boost=True)
 

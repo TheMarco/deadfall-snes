@@ -9,11 +9,15 @@ endif
 
 # Audio: smconv builds res/soundbank.{asm,h,bnk} from these .it modules and
 # snes_rules auto-links soundbank.obj. The SFX bank MUST be first so its samples
-# are the global effects (spcLoadEffect/spcEffect); music modules follow.
-# Music = test.mid converted to a chiptune module by tools/mid2it.py (real
-# composition played with synth voices; channel 9 -> drum one-shots). Generated
-# music_*.it / music_demo.it are kept in res/ but unused here.
-AUDIOFILES := res/sfx.it res/music_test.it
+# are the global effects (spcLoadEffect/spcEffect); music modules follow, and
+# their order fixes the MOD_* indices used in src/audio.c.
+# Music = the 12 songs/*.zip AddmusicK MML scores, rebuilt into snesmod chiptune
+# modules by tools/build_songs.py (-> tools/mml2it.py). Playing them through
+# snesmod (rather than uploading the raw .spc dumps) keeps the gameplay SFX
+# working. Regenerate with `make songs`.
+MUSICFILES := $(addprefix res/music_,level1.it level2.it level3.it level4.it \
+  level5.it level6.it level7.it level8.it level9.it level10.it portal.it gameover.it)
+AUDIOFILES := res/sfx.it $(MUSICFILES)
 export SOUNDBANK := res/soundbank
 
 include ${PVSNESLIB_HOME}/devkitsnes/snes_rules
@@ -25,7 +29,14 @@ SMCONVFLAGS := -s -o $(SOUNDBANK) -V -b 5 -f
 # converted asset changes, so regenerating res/ always lands in the ROM.
 data.obj: data.asm hdr.asm $(wildcard res/*.pic) $(wildcard res/*.pal) $(wildcard res/*.map)
 
-.PHONY: all rom run bitmaps gfx levels clean distclean
+# The soundbank's ROM-bank count varies with the music set; auto-generate the
+# matching spcSetBank list (include/soundbank_banks.h) from the smconv-produced
+# soundbank.asm, and compile audio.c only after it exists.
+include/soundbank_banks.h: $(SOUNDBANK).asm
+	@python3 tools/gen_soundbank_banks.py $< $@
+src/audio.obj: include/soundbank_banks.h
+
+.PHONY: all rom run bitmaps gfx levels songs clean distclean
 
 export ROMNAME := deadfall
 
@@ -47,6 +58,10 @@ run: all
 # Regenerate level data from the JS source (host python; no toolchain needed).
 levels:
 	python3 tools/convert_levels.py
+
+# Rebuild the music modules from songs/*.zip MML (-> res/music_*.it + previews).
+songs:
+	python3 tools/build_songs.py
 
 # Convert PNG art -> SNES tiles/palettes in res/ (needs gfx2snes on PATH).
 gfx:
