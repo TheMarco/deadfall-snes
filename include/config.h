@@ -111,4 +111,9 @@
 #define PAD_Y       0x4000
 #define PAD_B       0x8000
 
+/* Controls: mine = A. (Y is reserved for the debug level-skip below.) */
+#define PAD_MINE    PAD_A
+/* DEBUG: tap Y -> jump to the next level (wraps 10->1). SET TO 0 BEFORE RELEASE. */
+#define DEBUG_LEVEL_SKIP 1
+
 #endif /* CONFIG_H */

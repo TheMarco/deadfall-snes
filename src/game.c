@@ -684,6 +684,21 @@ void game_update(void) {
 
     game.frame++;
 
+#if DEBUG_LEVEL_SKIP
+    /* DEBUG (pre-release): tap Y -> next level (wraps 10->1). Edge-detected so
+     * holding Y skips once. Mining is on A now, so Y is free for this. */
+    {
+        static u8 dbg_yprev = 0;
+        u8 ynow = (u8)((cur & PAD_Y) != 0);
+        if (ynow && !dbg_yprev && !game.transitioning && !game.death_pending && p->alive) {
+            dbg_yprev = ynow;
+            load_level((u8)(game.current_level >= MAX_LEVELS ? 1 : game.current_level + 1));
+            return;
+        }
+        dbg_yprev = ynow;
+    }
+#endif
+
     /* section transition: fade screen out, switch section at black, fade in.
      * Gameplay (input, enemies, gravity) is frozen for the ~24 frames. */
     if (game.transitioning) {
@@ -838,13 +853,12 @@ void game_update(void) {
     else if (cur & PAD_UP)    dy = -1;
     else if (cur & PAD_DOWN)  dy = 1;
 
-    if (!(cur & (PAD_Y | PAD_B | PAD_A | PAD_X)))
+    if (!(cur & PAD_MINE))
         crush_completed = 0;               /* mine button released -> re-arm mining */
 
     if (p->alive && !p->is_moving && !game.death_pending) {
-        /* mine: hold any face button (A/B/X/Y) + a direction.
-         * (Final scheme is Y to mine; accepting all four eases testing.) */
-        if (cur & (PAD_Y | PAD_B | PAD_A | PAD_X)) {
+        /* mine: hold A (PAD_MINE) + a direction. */
+        if (cur & PAD_MINE) {
             cancel_push();                 /* mining cancels a pending push */
             if ((dx || dy) && !crush_completed) do_mine(dx, dy);   /* one tile per press */
         } else if (dx || dy) {
@@ -860,7 +874,7 @@ void game_update(void) {
         static u8 idle_phase, idle_timer;
         static const u8 idle_cols[4] = { 0, 1, 2, 1 };
         u8 standing = (u8)(p->alive && !p->is_moving && !game.death_pending &&
-                           !(dx || dy) && !(cur & (PAD_Y | PAD_B | PAD_A | PAD_X)));
+                           !(dx || dy) && !(cur & PAD_MINE));
         if (standing) {
             if (idle_timer) idle_timer--;
             if (idle_timer == 0) {
