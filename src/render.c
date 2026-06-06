@@ -1433,18 +1433,29 @@ static u8 flash_x0, flash_x1;
 #define FLASH_ROW 13
 void render_flash(const char *s) {
     u8 len = 0, x, x0;
-    u16 blk = (u16)((BG3_TEXT_PAL << 10) | 0x2000);
+    /* No black box behind the banner. Glyphs get the priority bit (lifted above
+     * the playfield); spaces emit the no-priority backing (sits behind BG1/BG2 =
+     * transparent over the level) -- the font's space tile 0 is an OPAQUE black
+     * block, so drawing it with priority would leave a black gap. */
+    u16 back = (u16)(BG3_TEXT_PAL << 10);
     while (s[len]) len++;
     x0 = (u8)((32 - len) / 2);
-    flash_x0 = (u8)(x0 ? x0 - 1 : 0);
-    flash_x1 = (u8)(x0 + len + 1); if (flash_x1 > 32) flash_x1 = 32;
-    for (x = flash_x0; x < flash_x1; x++) bg3map[FLASH_ROW * 32 + x] = blk;
-    render_text(x0, FLASH_ROW, s);
+    flash_x0 = x0;
+    flash_x1 = (u8)(x0 + len); if (flash_x1 > 32) flash_x1 = 32;
+    for (x = 0; x < len; x++) {
+        char c = s[x];
+        bg3map[FLASH_ROW * 32 + x0 + x] =
+            (c == ' ') ? back : (u16)((u16)(c - 32) | (BG3_TEXT_PAL << 10) | 0x2000);
+    }
+    bg3_dirty = 1;
+    game_map_dirty = 1;
 }
 void render_flash_clear(void) {
     u8 x;
-    for (x = flash_x0; x < flash_x1; x++) bg3map[FLASH_ROW * 32 + x] = 0;
+    u16 back = (u16)(BG3_TEXT_PAL << 10);
+    for (x = flash_x0; x < flash_x1; x++) bg3map[FLASH_ROW * 32 + x] = back;
     bg3_dirty = 1;
+    game_map_dirty = 1;
 }
 
 /* Draw the enemy edge-warning strips for the given direction mask (bit0=up,
