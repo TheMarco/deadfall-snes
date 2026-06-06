@@ -147,7 +147,10 @@ static const u8 hud_halfbar_tile[16] = {
 #define MM_CELL   3                      /* px per section cell (2px dot + 1px gap) */
 #define MM_DOT    2                      /* filled dot size (2x2 = 4px) */
 /* minimap OBJ palette: 0 transp, 1 black(bg/gaps), 2 dark-grey(out-of-world),
- * 3 light-grey(gems), 4 white(current), 5 green(cleared). BGR555, little-endian. */
+ * 3 light-grey(gems), 4 white(current), 5 green(cleared), 6 EXIT DOT (its colour
+ * is animated white<->off in vblank by render_minimap_blink, so the open-exit
+ * blink costs one CGRAM write instead of a full minimap rebuild). BGR555, LE. */
+#define MM_COL_EXIT 6
 static const u8 mm_obj_pal[32] = {
     0x00,0x00, 0x00,0x00, 0x08,0x21, 0x94,0x52,
     0xFF,0x7F, 0x00,0x03, 0x00,0x00, 0x00,0x00,
@@ -162,7 +165,7 @@ static u16 mm_blink;                     /* phase counter */
 static u8  mm_dirty = 0;                  /* tiles changed -> DMA in render_flush_map (boot-safe) */
 static u32 mm_sig = 0xFFFFFFFF;          /* last-drawn signature (skip rebuild if same) */
 static u8  mm_last_cur = 0xFF;            /* last current-section index (gate the sig rebuild) */
-static u8  mm_last_blink = 0xFF;          /* last portal-blink phase (force rebuild on toggle) */
+static u8  mm_last_portal = 0xFF;         /* last portal_active state (rebuild once when exit opens) */
 
 /* 32x32 tilemap buffers (entry = tile number | palette<<10 | flips). */
 static u16 bg1map[32 * 32];
@@ -427,6 +430,24 @@ void render_apply_alarm(void) {
         *((vuint8 *)0x2132) = (u8)(0x20 | red);     /* COLDATA R = red */
         *((vuint8 *)0x2131) = 0x37;                 /* CGADSUB add: BG1|BG2|BG3|OBJ|backdrop */
     }
+}
+
+/* Blink the minimap's exit dot while the exit is open by toggling ONLY its OBJ
+ * palette colour (slot MM_COL_EXIT) white<->off at ~3.75Hz. This replaces the old
+ * scheme that put the blink phase in the minimap signature and rebuilt the whole
+ * minimap (256px repaint + 4bpp repack + tile DMA) every 16 frames -- that periodic
+ * spike was the frantic-phase movement stutter. Now the open-exit blink is one
+ * CGRAM write on each toggle. Call right after WaitForVBlank (CGRAM is a PPU reg). */
+void render_minimap_blink(void) {
+    static u8 last_phase = 0xFF;
+    u8 phase;
+    if (!game.portal_active) { last_phase = 0xFF; return; }
+    phase = (u8)((game.frame >> 4) & 1);            /* toggle every 16 frames */
+    if (phase == last_phase) return;                /* only touch CGRAM on a flip */
+    last_phase = phase;
+    *((vuint8 *)0x2121) = (u8)(128 + OBJPAL_MINIMAP * 16 + MM_COL_EXIT);  /* CGADD */
+    if (phase) { *((vuint8 *)0x2122) = 0xFF; *((vuint8 *)0x2122) = 0x7F; }  /* white */
+    else       { *((vuint8 *)0x2122) = 0x00; *((vuint8 *)0x2122) = 0x00; }  /* off (black) */
 }
 
 /* Draw the player at its new-section entry position relative to the camera. */
@@ -1020,7 +1041,7 @@ void render_minimap(void) {
     u8  nsec = (u8)(game.world_rows * game.world_cols);
     u8  cur  = world_section_index(game.cur_row, game.cur_col);
     u32 sig;
-    u8  r, c, idx, x, y, tx, ty, scanned = 0, blink;
+    u8  r, c, idx, x, y, tx, ty, scanned = 0;
 
     mm_blink++;
 
@@ -1042,22 +1063,20 @@ void render_minimap(void) {
         scanned = 1;
     }
 
-    /* The signature only moves when the round-robin just rescanned a section, or
-     * when the current section changed. On the other ~3/4 frames it is identical
-     * to last frame, so skip the 16-iteration rebuild (which costs a per-section
-     * world_section_index multiply + a 32-bit variable shift each). */
-    /* once everything's cleared (portal open), blink the exit's section ~3.75Hz */
-    blink = game.portal_active ? (u8)((mm_blink >> 4) & 1) : 0;
-    if (!scanned && cur == mm_last_cur && blink == mm_last_blink) return;
+    /* The signature only moves when the round-robin just rescanned a section, the
+     * current section changed, or the exit just opened. The exit-dot BLINK is NOT
+     * in the signature -- it blinks via a single palette write in vblank
+     * (render_minimap_blink), so it never forces the expensive full rebuild. */
+    if (!scanned && cur == mm_last_cur && game.portal_active == mm_last_portal) return;
     mm_last_cur = cur;
-    mm_last_blink = blink;
+    mm_last_portal = game.portal_active;
 
     sig = 0;
     for (r = 0; r < game.world_rows; r++)
         for (c = 0; c < game.world_cols; c++)
             if (mm_has_gems[world_section_index(r, c)]) sig |= (u32)(1UL << (r * 4 + c));
     sig = (sig << 4) | cur;
-    sig = (sig << 1) | blink;          /* rebuild when the blink toggles */
+    sig = (sig << 1) | game.portal_active;   /* rebuild once when the exit opens */
     if (sig == mm_sig) return;
     mm_sig = sig;
 
@@ -1078,9 +1097,10 @@ void render_minimap(void) {
                 idx = world_section_index(r, c);
                 col = (idx == cur) ? 4 : mm_has_gems[idx] ? 3 : 5;  /* white / light-grey / green */
             }
-            /* exit section blinks white <-> off once the portal is open */
+            /* exit section uses the dedicated blink slot once the portal is open;
+             * its colour is animated white<->off in vblank by render_minimap_blink */
             if (game.portal_active && r == game.portal_row && c == game.portal_col)
-                col = blink ? 4 : 1;
+                col = MM_COL_EXIT;
             for (dy = 0; dy < MM_DOT; dy++)
                 for (dx = 0; dx < MM_DOT; dx++) mm_px[sy + dy][sx + dx] = col;
         }

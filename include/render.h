@@ -95,6 +95,7 @@ void render_slide_begin(u8 dir, u8 adj_row, u8 adj_col); /* stage adjacent secti
 void render_slide_scroll(u16 cam);  /* shadow BG1+BG2 scroll during a slide (applied in vblank) */
 void render_apply_scroll(void);     /* write shadowed scroll to PPU regs; call in vblank */
 void render_apply_alarm(void);      /* pulse the red alarm vignette via color math (vblank) */
+void render_minimap_blink(void);    /* blink the minimap exit dot via 1 CGRAM write (vblank) */
 void render_slide_player(u16 cam);  /* draw player entering the new section during a slide */
 void render_slide_end(void);        /* back to single-screen, scroll 0 */
 void render_set_cell(u8 gx, u8 gy); /* update just one grid cell's 4 BG entries (cheap)       */

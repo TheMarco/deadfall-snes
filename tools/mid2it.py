@@ -149,6 +149,10 @@ TRI, SQR, P25, P12, SAW, KICK, SNARE, HAT, CRASH = range(1, 10)
 
 
 def instruments():
+    # Re-seed so the drum noise is identical for EVERY module, even when several
+    # are built in one process (build_songs imports and calls us repeatedly): the
+    # combined level modules must share the exact same sample bank as each other.
+    np.random.seed(1234)
     cyc = lambda k: {"name": k.upper(), "pcm": _cycle(k), "rate": C5_SPEED, "loop": (0, WAVE_LEN)}
     return [
         cyc("triangle"),                                             # 1 lead/flute
@@ -304,10 +308,12 @@ def render_wav(path, samples, ev, it_tempo, speed=6, out_rate=32000):
         f.write(b"data" + struct.pack("<I", len(data)) + data)
 
 
-# --------------------------------------------------------------------- main --
-def main():
-    src = sys.argv[1] if len(sys.argv) > 1 else "test.mid"
-    name = sys.argv[2] if len(sys.argv) > 2 else os.path.splitext(os.path.basename(src))[0]
+# ----------------------------------------------------------- section looping --
+IT_FX_POSJUMP = 2     # IT effect 'B' = jump to order (1=A, 2=B, 3=C, ...)
+
+
+def prepare(src):
+    """MIDI -> (patterns, orders, ev, it_tempo, it_speed, midi_bpm, bpm, tpr)."""
     div, tempo, progs, notes, maxtick = parse_midi(src)
     midi_bpm = round(60_000_000 / tempo)
     bpm = TARGET_BPM if TARGET_BPM else midi_bpm
@@ -316,25 +322,90 @@ def main():
     # over 127bpm (e.g. a 170bpm track) down to 127 -- audibly too slow.
     it_speed = 3
     it_tempo = max(32, min(255, bpm))
-
     tpr, ev = build_events(div, notes)
-    counts = {c: len(ev[c]) for c in range(8) if ev[c]}
     loop_rows = int(round(maxtick / tpr)) if maxtick else None   # seamless loop length
     patterns, orders = to_patterns(ev, loop_rows)
-    smps = instruments()
+    return patterns, orders, ev, it_tempo, it_speed, midi_bpm, bpm, tpr
 
+
+def set_loop_jump(patterns, target_order):
+    """Make a self-contained section loop: put a Bxx (jump-to-order) on the last
+    row of the section's last pattern so playback wraps back to `target_order`
+    instead of falling through into whatever patterns follow (or wrapping to the
+    module's order 0 at the 0xFF end marker). The position jump is global, so we
+    can hang it on any channel -- reuse an existing event on that row, else add a
+    bare effect on channel 0. snesmod supports Bxx (only SBx/Cxx are limited)."""
+    rows, chrows = patterns[-1]
+    chrows = dict(chrows)
+    last = rows - 1
+    evs = list(chrows.get(last, []))
+    if evs:
+        ch, note, ins, vol, _c, _v = evs[0]
+        evs[0] = (ch, note, ins, vol, IT_FX_POSJUMP, target_order)
+    else:
+        evs = [(0, None, None, None, IT_FX_POSJUMP, target_order)]
+    chrows[last] = evs
+    patterns[-1] = (rows, chrows)
+
+
+# --------------------------------------------------------------- module build --
+def build_standalone(src, name):
+    """One MIDI -> res/music_<name>.it (the module loops as a whole, the old way)."""
+    patterns, orders, ev, it_tempo, it_speed, midi_bpm, bpm, tpr = prepare(src)
+    smps = instruments()
     it_path = os.path.join(RES, f"music_{name}.it")
     size = write_it(it_path, f"DEADFALL {name.upper()}", smps,
                     patterns=patterns, orders=orders,
                     channels=8, speed=it_speed, tempo=it_tempo)
     wav_path = os.path.join(RES, f"{name}_preview.wav")
     render_wav(wav_path, smps, ev, it_tempo, speed=it_speed)
-
+    counts = {c: len(ev[c]) for c in range(8) if ev[c]}
     print(f"src={src}  midi {midi_bpm}bpm -> {bpm}bpm / IT tempo {it_tempo}/speed{it_speed}  ({R} rows/quarter, {tpr} ticks/row)")
     print(f"IT channels (events): {counts}")
     print(f"{len(patterns)} patterns x {ROWS_PER_PAT} rows, {len(orders)} orders")
     print(f"wrote {it_path} ({size} bytes)")
     print(f"wrote {wav_path}  <-- listen to verify it's the song")
+    return size
+
+
+def build_combined(frantic_src, calm_src, name):
+    """Two MIDIs -> one res/music_<name>.it holding both themes as independently
+    looping sections, so the in-game swap (calm <-> frantic) is a cheap spcPlay
+    position jump with NO blocking module reload. Layout: the FRANTIC section is
+    first (orders 0..P-1), then the CALM theme (orders P..). Because the frantic
+    MIDI is the same for every level, P (= the calm start order) is constant.
+    Returns (size, calm_start). spcPlay(0)=frantic, spcPlay(calm_start)=calm."""
+    fpat, _fo, _fev, ftempo, fspeed, *_ = prepare(frantic_src)
+    cpat, _co, cev, ctempo, cspeed, *_ = prepare(calm_src)
+    calm_start = len(fpat)                       # first calm order
+    set_loop_jump(fpat, 0)                        # frantic loops within 0..P-1
+    set_loop_jump(cpat, calm_start)               # calm loops within P..
+    patterns = fpat + cpat
+    orders = list(range(len(patterns)))
+    smps = instruments()
+    it_path = os.path.join(RES, f"music_{name}.it")
+    # Both MIDIs are forced to TARGET_BPM, so one global tempo/speed fits both.
+    size = write_it(it_path, f"DEADFALL {name.upper()}", smps,
+                    patterns=patterns, orders=orders,
+                    channels=8, speed=cspeed, tempo=ctempo)
+    # Audition preview = the calm level theme (the frantic theme has its own
+    # preview from the standalone portal build).
+    wav_path = os.path.join(RES, f"{name}_preview.wav")
+    render_wav(wav_path, smps, cev, ctempo, speed=cspeed)
+    print(f"[combine] {name}: frantic {len(fpat)}pat + calm {len(cpat)}pat "
+          f"-> calm_start={calm_start}, {len(patterns)} orders, {size}B -> {it_path}")
+    return size, calm_start
+
+
+# --------------------------------------------------------------------- main --
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--combine":
+        # mid2it.py --combine FRANTIC.mid CALM.mid OUTNAME
+        build_combined(sys.argv[2], sys.argv[3], sys.argv[4])
+        return
+    src = sys.argv[1] if len(sys.argv) > 1 else "test.mid"
+    name = sys.argv[2] if len(sys.argv) > 2 else os.path.splitext(os.path.basename(src))[0]
+    build_standalone(src, name)
 
 
 if __name__ == "__main__":

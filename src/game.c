@@ -744,7 +744,7 @@ void game_update(void) {
         }
         /* A falling tile only kills the player when it actually REACHES them
          * (pixel overlap), so you get the fall's worth of time to run out from
-         * under it -- matching the original. (Enemies are crushed up-front.) */
+         * under it -- matching the original. */
         if (game.player.alive && !game.death_pending) {
             s16 ppx = game.player.pixel_x, ppy = game.player.pixel_y;
             for (i = 0; i < fall_anim_n; i++) {
@@ -754,6 +754,36 @@ void game_update(void) {
                 fx = (s16)((s16)(a->col * TILE_SIZE) - ppx); if (fx < 0) fx = (s16)(-fx);
                 fy = (s16)(a->py - ppy);                     if (fy < 0) fy = (s16)(-fy);
                 if (fx < TILE_SIZE && fy < TILE_SIZE) { player_die(); break; }
+            }
+        }
+        /* Enemies are crushed the same per-frame way (pixel overlap as the tile
+         * falls), NOT only on the up-front settle snapshot: enemies are almost
+         * always moving, so a boulder/gem dropped onto a walking enemy must kill
+         * it when the tile actually arrives, not just if it stood in the column
+         * at mine-time. +500 indirect kill, like the original. (The dead enemy's
+         * `alive` flag stops the up-front check from also counting it.) */
+        {
+            u8 j;
+            for (j = 0; j < game.enemy_count; j++) {
+                Enemy *e = &game.enemies[j];
+                s16 epx, epy;
+                if (!e->alive) continue;
+                if (e->section_row != game.cur_row || e->section_col != game.cur_col) continue;
+                epx = e->pixel_x; epy = e->pixel_y;
+                for (i = 0; i < fall_anim_n; i++) {
+                    FallAnim *a = &fall_anim[i];
+                    s16 fx, fy;
+                    if (!a->active || a->type == TILE_EXTRA_LIFE) continue;
+                    fx = (s16)((s16)(a->col * TILE_SIZE) - epx); if (fx < 0) fx = (s16)(-fx);
+                    fy = (s16)(a->py - epy);                     if (fy < 0) fy = (s16)(-fy);
+                    if (fx < TILE_SIZE && fy < TILE_SIZE) {
+                        enemy_die(e);
+                        game.score += SCORE_CRUSH_KILL;
+                        game.enemies_killed++;
+                        audio_sfx(SFX_ENEMYKILL);
+                        break;
+                    }
+                }
             }
         }
         if (!any) { render_falls_hide(); game.gravity_resolving = 0; }

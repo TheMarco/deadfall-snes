@@ -182,6 +182,7 @@ int main(void) {
                             * spill into active display. */
         render_apply_scroll();   /* re-assert scroll after the lib's NMI reset it */
         render_apply_alarm();    /* pulse the red alarm vignette (exit open) */
+        render_minimap_blink();  /* blink the minimap exit dot (1 CGRAM write, no rebuild) */
     }
     return 0;
 }

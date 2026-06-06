@@ -8,6 +8,7 @@
 #include <snes.h>
 #include "audio.h"
 #include "config.h"          /* MAX_LEVELS */
+#include "music_layout.h"    /* MUSIC_CALM_START / MUSIC_FRANTIC_START (generated) */
 #include "res/soundbank.h"
 /* The soundbank spans several 32KB ROM banks (SOUNDBANK__0..); the count varies
  * with the music set, so the exact list of banks to register is auto-generated
@@ -47,15 +48,18 @@ void audio_sfx(u8 idx) {
  * at full volume via spcEffect); raise/lower to taste. */
 #define MUSIC_VOLUME 64
 
-/* Switch the playing module. spcLoad re-inits ARAM, so the effect samples must
- * be reloaded afterwards. Blocking + slowish - call during level transitions. */
-void audio_play_music(u8 module) {
+/* Load a module and start it at order `startpos`. spcLoad re-inits ARAM, so the
+ * effect samples must be reloaded afterwards. BLOCKING + slowish (it uploads the
+ * whole module + every SFX sample to the SPC) - call ONLY during level
+ * transitions / scene changes, never mid-gameplay. The in-level calm<->frantic
+ * swap goes through audio_music_frantic (a cheap spcPlay), not this. */
+void audio_play_music(u8 module, u8 startpos) {
     u8 i;
     music_once = 0;                 /* default: loop (cleared for every track but gameover) */
     spcStop();
     spcLoad(module);
     for (i = 0; i < SFX_COUNT; i++) spcLoadEffect(i);
-    spcPlay(0);
+    spcPlay(startpos);
     spcSetModuleVolume(MUSIC_VOLUME);   /* duck music below the SFX */
 }
 
@@ -71,16 +75,26 @@ static const u8 level_module[MAX_LEVELS] = {
 void audio_music_level(u8 level) {
     if (level < 1) level = 1;
     if (level > MAX_LEVELS) level = MAX_LEVELS;
-    audio_play_music(level_module[level - 1]);
+    /* Each level module embeds the frantic theme as its first section, so the
+     * calm level theme lives at MUSIC_CALM_START (not order 0). */
+    audio_play_music(level_module[level - 1], MUSIC_CALM_START);
 }
 
-/* All gems collected / exit open: the tense "Fatal Chase" portal theme. */
-void audio_music_frantic(void)  { audio_play_music(MOD_MUSIC_PORTAL); }
-/* Victory/credits reuses the triumphant "Golden Anthem" (level 10). */
-void audio_music_credits(void)  { audio_play_music(MOD_MUSIC_LEVEL10); }
-/* Game over: play the jingle exactly ONCE, then silence (don't loop). */
+/* All gems collected / exit open: the tense "Fatal Chase" theme. It's already
+ * resident as the first section of the current level module, so we just jump the
+ * order pointer there -- a cheap queued spcPlay, NOT a blocking spcLoad. This is
+ * what kills the old freeze/slowdown when the exit opened. (A/B-tested: the music
+ * swap is NOT the source of the frantic-phase stutter; that was the minimap
+ * rebuild, fixed in render_minimap_blink.) */
+void audio_music_frantic(void) {
+    spcPlay(MUSIC_FRANTIC_START);
+    spcSetModuleVolume(MUSIC_VOLUME);   /* spcPlay resets module volume; re-duck */
+}
+/* Victory/credits reuses the triumphant "Golden Anthem" (level 10's calm theme). */
+void audio_music_credits(void)  { audio_play_music(MOD_MUSIC_LEVEL10, MUSIC_CALM_START); }
+/* Game over: standalone module, played once from the top, then silence. */
 void audio_music_gameover(void) {
-    audio_play_music(MOD_MUSIC_GAMEOVER);
+    audio_play_music(MOD_MUSIC_GAMEOVER, 0);
     music_once = 1;
     once_peak = 0;
 }
