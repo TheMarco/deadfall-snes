@@ -352,14 +352,16 @@ void render_vblank(void) {
 /* Build an arbitrary section's playfield metatiles into a tilemap buffer. */
 static void render_build_section_to(u16 *buf, u8 sr, u8 sc) {
     u8 idx = world_section_index(sr, sc);
+    u8 (*sec)[GRID_COLS] = game.sections[idx];   /* hoist: no idx*208 per access */
+    u8 (*dmg)[GRID_COLS] = game.damage[idx];
     u8 base = (u8)(PLAYFIELD_OFFSET_Y >> 3);
     u8 gx, gy;
     u16 i;
     for (i = base * 32; i < 32 * 32; i++) buf[i] = 0;
     for (gy = 0; gy < GRID_ROWS; gy++)
         for (gx = 0; gx < GRID_COLS; gx++) {
-            u8 t  = game.sections[idx][gy][gx];
-            u8 mt = metatile_for(t, game.damage[idx][gy][gx]);
+            u8 t  = sec[gy][gx];
+            u8 mt = metatile_for(t, dmg[gy][gx]);
             u16 b = (u16)(mt * 4), pb = mt_palbits[mt];
             u16 col = (u16)(gx * 2), row = (u16)(base + gy * 2);
             buf[row * 32 + col]           = b | pb;
