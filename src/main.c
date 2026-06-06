@@ -27,6 +27,7 @@ enum { SC_LOGO, SC_TITLE, SC_PLAY, SC_GAMEOVER, SC_VICTORY };
 #define LOGO_FADE       18     /* fade-to-title frames */
 
 static void scene_title(void) {
+    render_load_font(1);                     /* transparent font: text floats on the title art */
     render_hide_sprites();
     render_clear_screen();
     render_text(10, 24, "PRESS  START");   /* below the logo (BG3, over the image) */
@@ -38,6 +39,7 @@ static void scene_title(void) {
 }
 
 static void scene_gameover(void) {
+    render_load_font(1);                     /* transparent font: text floats on the backdrop */
     render_hide_sprites();
     render_clear_screen();
     render_text(11, 10, "GAME OVER");
@@ -56,6 +58,7 @@ static void scene_gameover(void) {
 #define CREDITS_STAGES   4
 #define CREDITS_DWELL    200    /* ~3.3s per stage */
 static void scene_credits(u8 stage) {
+    render_load_font(1);                     /* transparent font: text floats on the backdrop */
     render_hide_sprites();
     render_clear_screen();
     switch (stage) {

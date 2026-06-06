@@ -41,7 +41,8 @@ extern char spr_falls_8_pic, spr_falls_8_picend, spr_falls_8_pal;
 extern char spr_falls_9_pic, spr_falls_9_picend, spr_falls_9_pal;
 extern char spr_falls_10_pic, spr_falls_10_picend, spr_falls_10_pal;
 extern char hud_font_pic, hud_font_picend, hud_font_pal;
-extern char hud_font2_pic, hud_font2_picend;   /* 2bpp font for BG3 text layer */
+extern char hud_font2_pic, hud_font2_picend;   /* 2bpp font, OPAQUE-black bg (gameplay/HUD) */
+extern char hud_font2t_pic;                    /* 2bpp font, TRANSPARENT bg (text scenes)   */
 extern char hud_font2_pal;                     /* BG3 sub-palette: white text on black */
 
 /* Seamless repeating background texture (128x96 = 16x12 tiles), tiled across
@@ -130,6 +131,13 @@ static const u8 edge_left_tile[16] = { 0xE0,0,0xE0,0,0xE0,0,0xE0,0,0xE0,0,0xE0,0
 static const u8 hud_halfbar_tile[16] = {
     0x00,0xFF, 0x00,0xFF, 0x00,0xFF, 0,0, 0,0, 0,0, 0,0, 0,0
 };
+
+/* The SECTION CLEARED / NO ENTRY flash shows during gameplay, where the OPAQUE
+ * font is loaded (so the HUD reads as a solid bar). To keep the flash box-free,
+ * TRANSPARENT-bg copies of just its letters live at FLASH_TILE_BASE.. (loaded in
+ * render_init from the transparent font); render_flash maps each char to one. */
+#define FLASH_TILE_BASE 77
+static const char FLASH_CHARS[] = "SECTIONLARDY";   /* letters in SECTION CLEARED + NO ENTRY */
 
 /* ---- HUD minimap (4-COLOUR sprite, top-right corner) ----
  * Drawn as a 16x16 OBJ (not BG3, which is 2bpp = too few colours) so it can show
@@ -971,6 +979,12 @@ void render_init(void) {
     dmaCopyVram((u8 *)edge_left_tile, (u16)(VRAM_BG3_TILES + EDGE_TILE_LEFT * 8), 16);
     dmaCopyVram((u8 *)hud_colon_tile, (u16)(VRAM_BG3_TILES + HUD_COLON_TILE * 8), 16);
     dmaCopyVram((u8 *)hud_halfbar_tile, (u16)(VRAM_BG3_TILES + HUD_HALFBAR_TILE * 8), 16);  /* bar lower edge */
+    /* Transparent-bg copies of the banner letters at FLASH_TILE_BASE.. so the
+     * SECTION CLEARED / NO ENTRY flash floats over the playfield even though the
+     * opaque font is the one loaded at tiles 0..63 during gameplay. */
+    { u8 j; for (j = 0; FLASH_CHARS[j]; j++)
+        dmaCopyVram((u8 *)&hud_font2t_pic + (FLASH_CHARS[j] - 32) * 16,
+                    (u16)(VRAM_BG3_TILES + (FLASH_TILE_BASE + j) * 8), 16); }
     bgSetGfxPtr(2, VRAM_BG3_TILES);
     bgSetMapPtr(2, VRAM_BG3_MAP, SC_32x32);
     wipe_init();   /* upload the diamond-wipe tiles now (boot, screen blanked = safe DMA) */
@@ -1338,6 +1352,25 @@ void render_minimap_reset(void) {
 }
 
 /* ---- text scenes (title / game over / victory) on BG1 ---- */
+/* Swap the BG3 text font between the OPAQUE variant (gameplay -> HUD reads as a
+ * solid bar) and the TRANSPARENT variant (text scenes -> letters float on the
+ * backdrop, no black box). VRAM DMA, so force-blank around it; callers run during
+ * a synchronous scene/level transition so the blank is never displayed. */
+void render_load_font(u8 transparent) {
+    u8 j;
+    setScreenOff();
+    dmaCopyVram(transparent ? (u8 *)&hud_font2t_pic : (u8 *)&hud_font2_pic,
+                VRAM_BG3_TILES, (u16)(&hud_font2_picend - &hud_font2_pic));
+    /* Re-assert the non-font BG3 tiles that sit just past the font block, so a
+     * font swap can never leave the HUD bar's lower edge or the banner glyphs
+     * stale (the 2px-shave guard). */
+    dmaCopyVram((u8 *)hud_halfbar_tile, (u16)(VRAM_BG3_TILES + HUD_HALFBAR_TILE * 8), 16);
+    for (j = 0; FLASH_CHARS[j]; j++)
+        dmaCopyVram((u8 *)&hud_font2t_pic + (FLASH_CHARS[j] - 32) * 16,
+                    (u16)(VRAM_BG3_TILES + (FLASH_TILE_BASE + j) * 8), 16);
+    setScreenOn();
+}
+
 void render_clear_screen(void) {
     u16 i;
     /* BG3 clears to the opaque BLACK space tile (tile 0, BG3 text sub-palette,
@@ -1433,19 +1466,19 @@ static u8 flash_x0, flash_x1;
 #define FLASH_ROW 13
 void render_flash(const char *s) {
     u8 len = 0, x, x0;
-    /* No black box behind the banner. Glyphs get the priority bit (lifted above
-     * the playfield); spaces emit the no-priority backing (sits behind BG1/BG2 =
-     * transparent over the level) -- the font's space tile 0 is an OPAQUE black
-     * block, so drawing it with priority would leave a black gap. */
-    u16 back = (u16)(BG3_TEXT_PAL << 10);
+    u16 back = (u16)(BG3_TEXT_PAL << 10);   /* no-priority backing -> transparent over the level */
     while (s[len]) len++;
     x0 = (u8)((32 - len) / 2);
     flash_x0 = x0;
     flash_x1 = (u8)(x0 + len); if (flash_x1 > 32) flash_x1 = 32;
     for (x = 0; x < len; x++) {
         char c = s[x];
-        bg3map[FLASH_ROW * 32 + x0 + x] =
-            (c == ' ') ? back : (u16)((u16)(c - 32) | (BG3_TEXT_PAL << 10) | 0x2000);
+        u16 tile = (u16)(c - 32);           /* opaque fallback for any char not below */
+        u8 j;
+        if (c == ' ') { bg3map[FLASH_ROW * 32 + x0 + x] = back; continue; }
+        for (j = 0; FLASH_CHARS[j]; j++)
+            if (FLASH_CHARS[j] == c) { tile = (u16)(FLASH_TILE_BASE + j); break; }
+        bg3map[FLASH_ROW * 32 + x0 + x] = (u16)(tile | (BG3_TEXT_PAL << 10) | 0x2000);
     }
     bg3_dirty = 1;
     game_map_dirty = 1;

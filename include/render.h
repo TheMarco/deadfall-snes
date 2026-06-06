@@ -122,6 +122,7 @@ void render_flash_clear(void);     /* clear the flash banner cells              
 void render_edge_warn(u8 mask);    /* enemy edge-warning strips (bits up/down/left/right) */
 void render_minimap(void);     /* update the monochrome section minimap (top-right)  */
 void render_minimap_reset(void); /* drop minimap cache so it rebuilds (level load)    */
+void render_load_font(u8 transparent);     /* swap BG3 text font: opaque (HUD) / transparent (scenes) */
 void render_clear_screen(void);            /* clear the whole BG1 tilemap (text scenes) */
 void render_text(u8 x, u8 y, const char *s); /* HUD-font text anywhere on BG1           */
 void render_num(u8 x, u8 y, u32 val, u8 digits); /* HUD-font fixed-width number          */

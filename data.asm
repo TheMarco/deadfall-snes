@@ -113,6 +113,8 @@ hud_font_palend:
 .section ".rodata_hudfont2" superfree
 hud_font2_pic:  .incbin "res/hud_font2.pic"
 hud_font2_picend:
+hud_font2t_pic: .incbin "res/hud_font2t.pic"
+hud_font2t_picend:
 hud_font2_pal:  .incbin "res/hud_font2.pal"
 .ends
 
