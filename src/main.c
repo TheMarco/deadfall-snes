@@ -146,7 +146,12 @@ int main(void) {
                 break;
 
             case SC_TITLE:
-                if (down & PAD_START) { audio_sfx(SFX_MENUSEL); game_init(); scene = SC_PLAY; }
+                if (down & PAD_START) {
+                    audio_sfx(SFX_MENUSEL);
+                    audio_music_fadeout(45);   /* fade the title theme out before the level loads */
+                    game_init();
+                    scene = SC_PLAY;
+                }
                 break;
 
             case SC_PLAY:

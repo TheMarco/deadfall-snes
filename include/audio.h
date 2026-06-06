@@ -16,6 +16,7 @@ void audio_music_credits(void);    /* victory/credits theme                 */
 void audio_music_intro(void);      /* title-screen theme (loops)            */
 void audio_music_levelfinished(void); /* level-complete jingle (plays once) */
 void audio_music_gameover(void);   /* game-over theme                       */
+void audio_music_fadeout(u8 frames); /* BLOCKING: ramp music to silence + stop */
 void audio_stop(void);             /* stop music (effects stay playable)    */
 
 #endif /* AUDIO_H */

@@ -47,6 +47,10 @@ void audio_sfx(u8 idx) {
  * at full volume via spcEffect); raise/lower to taste. */
 #define MUSIC_VOLUME 64
 
+/* A one-shot jingle ramps its volume down to 0 over its last ONCE_FADE_FRAMES
+ * frames instead of cutting off hard. ~0.75s at 60Hz. */
+#define ONCE_FADE_FRAMES 45
+
 /* Load a module and start it at order `startpos`. spcLoad re-inits ARAM, so the
  * effect samples must be reloaded afterwards. BLOCKING + slowish (it uploads the
  * whole module + every SFX sample to the SPC) - call ONLY during level
@@ -107,9 +111,28 @@ void audio_music_levelfinished(void) {
 
 void audio_stop(void) { once_timer = 0; spcStop(); }
 
+/* Ramp the current module's volume to silence over `frames` frames, then stop it.
+ * BLOCKING (pumps the SPC + waits a vblank each frame, like the screen wipe) -- for
+ * scene changes, e.g. fading the level theme out before the level-complete jingle
+ * instead of cutting it dead. */
+void audio_music_fadeout(u8 frames) {
+    u8 f;
+    once_timer = 0;
+    if (frames == 0) { spcStop(); return; }
+    for (f = frames; f != 0; f--) {
+        spcSetModuleVolume((u8)((u16)MUSIC_VOLUME * (f - 1) / frames));
+        spcProcess();
+        WaitForVBlank();
+    }
+    spcStop();
+}
+
 void audio_process(void) {
-    if (once_timer) {               /* one-shot track: stop it after its single length */
-        if (--once_timer == 0) spcStop();
+    if (once_timer) {               /* one-shot track: fade its tail, then stop at the end */
+        once_timer--;
+        if (once_timer < ONCE_FADE_FRAMES)
+            spcSetModuleVolume((u8)((u16)MUSIC_VOLUME * once_timer / ONCE_FADE_FRAMES));
+        if (once_timer == 0) spcStop();
     }
     spcProcess();                   /* feed the sound engine each frame */
 }

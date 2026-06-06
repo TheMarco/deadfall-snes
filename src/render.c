@@ -1386,6 +1386,8 @@ void render_lc_banner(void) {
                  ? game.current_level - 1 : 8);
     u16 *src = (u16 *)kitty_map_tbl[k];
     u16 i;
+    audio_music_fadeout(45);    /* fade the gameplay theme out (level still on screen) instead
+                                 * of cutting it dead when the jingle loads */
     render_hide_sprites();      /* drop player/enemies first so only the BG wipes */
     render_wipe_out();          /* SMAS diamond wipe: the just-cleared level ripples to black */
     audio_music_levelfinished(); /* play the level-complete jingle ONCE; the blocking SPC load
