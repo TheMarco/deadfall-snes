@@ -59,7 +59,10 @@ extern char bgtex_7_pic, bgtex_7_picend, bgtex_7_map, bgtex_7_pal;
 extern char bgtex_8_pic, bgtex_8_picend, bgtex_8_map, bgtex_8_pal;
 extern char bgtex_9_pic, bgtex_9_picend, bgtex_9_map, bgtex_9_pal;
 extern char bgtex_10_pic, bgtex_10_picend, bgtex_10_map, bgtex_10_pal;
-extern char title_pic, title_picend, title_map, title_pal;   /* title-screen BG2 image */
+extern char title_pic, title_picend, title_map, title_pal;   /* (old 4bpp title, unused) */
+extern char title8_pic;                  /* 8bpp Mode-3 title: tiles part A (first 0x4000 bytes) */
+extern char title8_pic_b, title8_pic_bend;  /* tiles part B (rest, split across ROM banks) */
+extern char title8_map, title8_pal, title8_palend;
 extern char logo_pic, logo_picend, logo_map, logo_pal;       /* boot studio-logo BG2 image (512-tall) */
 extern char kitty_1_pic, kitty_1_picend, kitty_1_map, kitty_1_pal;   /* level-complete kitties 1-9 */
 extern char kitty_2_pic, kitty_2_picend, kitty_2_map, kitty_2_pal;
@@ -898,22 +901,29 @@ void render_logo_reset(void) {
     for (i = 0; i < MAX_PART; i++)  lpart[i].life = 0;
 }
 
+/* Title VRAM (scratch -- gameplay reloads BG tiles/maps on the next level load). */
+#define VRAM_T8_TILES 0x0000   /* 8bpp title tiles (up to ~0x6000 words / 768 tiles) */
+#define VRAM_T8_MAP   0x7000   /* 32x32 title tilemap (past the tile region)         */
+/* The title illustration is shown as an 8bpp MODE 3 background: 256 colours with
+ * NO 16-per-tile limit, so the artwork's exact colours survive 1:1 (a 4bpp Mode-1
+ * BG would crush it). Title-only -- render_clear_screen restores Mode 1 for every
+ * other scene + gameplay. */
 void render_show_title(void) {
-    u16 *src = (u16 *)&title_map;
-    u16 i;
     setScreenOff();
-    dmaCopyVram((u8 *)&title_pic, VRAM_BG2_TILES, (u16)(&title_picend - &title_pic));
-    bgSetGfxPtr(1, VRAM_BG2_TILES);
-    setPalette((u8 *)&title_pal, BG2_PAL * 16, 96 * 2);   /* CGRAM 32..127 */
-    bgSetMapPtr(1, VRAM_BG2_MAP, SC_32x32);
-    for (i = 0; i < 32 * 32; i++) bg2map[i] = src[i];     /* 1:1, not tiled */
-    dmaCopyVram((u8 *)bg2map, VRAM_BG2_MAP, 0x800);
-    bg2_cur_x = 0; bg2_cur_y = 0;
+    /* tiles come in two ROM-bank chunks; DMA them to consecutive VRAM (part B
+     * starts 0x4000 bytes = 0x2000 words after part A). */
+    dmaCopyVram((u8 *)&title8_pic, VRAM_T8_TILES, 0x4000);
+    dmaCopyVram((u8 *)&title8_pic_b, (u16)(VRAM_T8_TILES + 0x2000),
+                (u16)(&title8_pic_bend - &title8_pic_b));
+    dmaCopyVram((u8 *)&title8_map, VRAM_T8_MAP, 0x800);
+    setPalette((u8 *)&title8_pal, 0, (u16)(&title8_palend - &title8_pal));  /* CGRAM 0.. */
+    bgSetGfxPtr(0, VRAM_T8_TILES);
+    bgSetMapPtr(0, VRAM_T8_MAP, SC_32x32);
     scr_bg1x = 0; scr_bg1y = 0; scr_bg2x = 0; scr_bg2y = 0; scroll_dirty = 0;
-    bgSetMapPtr(0, VRAM_BG1_MAP, SC_32x32);
     bgSetScroll(0, 0, 0);
-    bgSetScroll(1, 0, 0);
-    render_flush_map();                                   /* push BG1(empty)+BG3(text) */
+    setMode(BG_MODE3, 0);
+    REG_BGMODE = 0x03;                  /* mode 3: BG1 = 8bpp */
+    videoMode  = 0x01; REG_TM = 0x01;   /* show only BG1 (the image) */
     setScreenOn();
 }
 
@@ -1373,6 +1383,14 @@ void render_load_font(u8 transparent) {
 
 void render_clear_screen(void) {
     u16 i;
+    /* Restore Mode 1 (the title screen runs Mode 3). render_clear_screen is the
+     * common entry for every text scene AND load_level, so this guarantees we're
+     * back in Mode 1 with all layers on before anything non-title draws. */
+    setMode(BG_MODE1, 0);
+    REG_BGMODE = 0x09;                 /* mode 1 + BG3 high priority */
+    videoMode  = 0x17; REG_TM = 0x17;  /* BG1|BG2|BG3|OBJ */
+    bgSetGfxPtr(0, VRAM_BG1_TILES);    /* the title pointed BG1 at the 8bpp tiles -- restore */
+    bgSetMapPtr(0, VRAM_BG1_MAP, SC_32x32);
     /* BG3 clears to the opaque BLACK space tile (tile 0, BG3 text sub-palette,
      * NO priority bit -> sits BEHIND BG1/BG2). This gives the title screen a
      * black backing so the title image's transparent (index-0) areas read as

@@ -27,14 +27,11 @@ enum { SC_LOGO, SC_TITLE, SC_PLAY, SC_GAMEOVER, SC_VICTORY };
 #define LOGO_FADE       18     /* fade-to-title frames */
 
 static void scene_title(void) {
-    render_load_font(1);                     /* transparent font: text floats on the title art */
     render_hide_sprites();
-    render_clear_screen();
-    render_text(10, 24, "PRESS  START");   /* below the logo (BG3, over the image) */
-    render_text(6,  26, "ARROWS MOVE  A MINE");   /* controls hint (port of the how-to-play) */
-    audio_music_intro();                    /* title theme (loops); load now while the screen
-                                             * is still black (between logo fade-out and title) */
-    render_show_title();                    /* the real DEADFALL logo image on BG2  */
+    render_clear_screen();                  /* clear leftover logo sprites/BG3 (Mode 3 set below) */
+    render_show_title();                    /* Mode-3 8bpp title image; un-blanks showing the title */
+    audio_music_intro();                    /* title theme -- AFTER show_title so the ~1s SPC load
+                                             * freezes on the title, not on the leftover logo */
     game_map_dirty = 1;
 }
 

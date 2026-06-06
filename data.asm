@@ -49,6 +49,19 @@ title_map: .incbin "res/title.map"
 title_pal: .incbin "res/title.pal"
 .ends
 
+; 8bpp title tiles can exceed one 32KB ROM bank, so split at 0x4000 bytes into
+; two sections (each must fit a bank); render_show_title DMAs them back-to-back.
+.section ".rodata_title8a" superfree
+title8_pic:  .incbin "res/title8.pic" read $4000
+.ends
+.section ".rodata_title8b" superfree
+title8_pic_b:  .incbin "res/title8.pic" skip $4000
+title8_pic_bend:
+title8_map: .incbin "res/title8.map"
+title8_pal: .incbin "res/title8.pal"
+title8_palend:
+.ends
+
 ; ---- Boot studio-logo BG2 image (gamestudios, centred). ~3KB pic. ----
 .section ".rodata_logo" superfree
 logo_pic: .incbin "res/logo.pic"

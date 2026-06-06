@@ -214,6 +214,8 @@ static void load_level(u8 n) {
                               * for entering gameplay (render_wipe_in below), not for the
                               * non-gameplay screen we're leaving */
     render_load_font(0);     /* gameplay uses the OPAQUE font -> HUD reads as a solid bar */
+    setScreenOff();          /* render_load_font un-blanked; stay blanked through the whole
+                              * build so no half-built/garbled frame shows before render_wipe_in */
     world_load_level(n);
     player_set_spawn(game.portal.x, game.portal.y, game.portal_row, game.portal_col);
 
