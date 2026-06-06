@@ -210,7 +210,9 @@ static void load_level(u8 n) {
     u8 sx, sy, sr, sc, i;
     u16 md;
 
-    render_wipe_out();       /* SMAS diamond wipe: the current scene ripples out to black */
+    setScreenOff();          /* blank the title/banner for the build -- the wipe is reserved
+                              * for entering gameplay (render_wipe_in below), not for the
+                              * non-gameplay screen we're leaving */
     world_load_level(n);
     player_set_spawn(game.portal.x, game.portal.y, game.portal_row, game.portal_col);
 
@@ -241,6 +243,11 @@ static void load_level(u8 n) {
     game.push_pending = 0;
     game.crush_safety_timer = 0;
     game.death_pending = 0;
+    game.transitioning = 0;      /* clear stale section-transition state -- WRAM isn't zeroed
+                                  * at boot, so a garbage value here ran the brightness-fade on
+                                  * the first level (the pre-existing "game start" flash) */
+    game.trans_phase = 0;
+    game.trans_timer = 0;
     fall_anim_n = 0;              /* drop any in-flight falling-tile anims */
     push_anim.active = 0; render_push_hide();   /* drop any in-flight push slide */
     for (i = 0; i < 16; i++) game.cell_anims[i].active = 0;  /* drop shatter anims */

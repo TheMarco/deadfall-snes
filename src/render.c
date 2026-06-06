@@ -1349,6 +1349,10 @@ void render_clear_screen(void) {
     bg3_dirty = 1;
     edge_last_mask = 0;        /* edge-warning strips were just wiped */
     oamSetVisible((u16)(OAM_MINIMAP * 4), OBJ_HIDE);  /* no minimap on text scenes */
+    /* Hide leftover boot-logo sparkle OBJs (slots 31..58): gameplay/title only
+     * manage 0..27, so live sparkles would otherwise freeze on top of a new scene
+     * (the "flashing" dots when a level starts). */
+    { u8 s; for (s = 28; s < 64; s++) oamSetVisible((u16)(s * 4), OBJ_HIDE); }
 }
 
 void render_text(u8 x, u8 y, const char *s) {
@@ -1406,7 +1410,8 @@ void render_lc_banner(void) {
     scr_bg1x = 0; scr_bg1y = 0; scr_bg2x = 0; scr_bg2y = 0; scroll_dirty = 0;
     bgSetScroll(0, 0, 0);
     bgSetScroll(1, 0, 0);
-    render_wipe_in();           /* SMAS diamond wipe: the banner ripples in (un-blanks itself) */
+    setScreenOn();              /* the banner is not gameplay -> just show it (no wipe); the
+                                 * wipe is reserved for leaving the level (the wipe_out above) */
 }
 
 void render_hide_sprites(void) {
