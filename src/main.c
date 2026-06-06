@@ -31,6 +31,8 @@ static void scene_title(void) {
     render_clear_screen();
     render_text(10, 24, "PRESS  START");   /* below the logo (BG3, over the image) */
     render_text(6,  26, "ARROWS MOVE  Y MINE");   /* controls hint (port of the how-to-play) */
+    audio_music_intro();                    /* title theme (loops); load now while the screen
+                                             * is still black (between logo fade-out and title) */
     render_show_title();                    /* the real DEADFALL logo image on BG2  */
     game_map_dirty = 1;
 }

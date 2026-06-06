@@ -13,6 +13,8 @@ void audio_play_music(u8 module, u8 startpos);  /* BLOCKING load+play (reloads e
 void audio_music_level(u8 level);  /* play level n's theme (n=1..10)        */
 void audio_music_frantic(void);    /* jump to frantic section (cheap spcPlay) */
 void audio_music_credits(void);    /* victory/credits theme                 */
+void audio_music_intro(void);      /* title-screen theme (loops)            */
+void audio_music_levelfinished(void); /* level-complete jingle (plays once) */
 void audio_music_gameover(void);   /* game-over theme                       */
 void audio_stop(void);             /* stop music (effects stay playable)    */
 

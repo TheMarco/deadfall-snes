@@ -19,7 +19,8 @@ endif
 # it into each level module as a second, independently looping section, so the
 # exit-open swap is a cheap spcPlay (see src/audio.c, include/music_layout.h).
 MUSICFILES := $(addprefix res/music_,level1.it level2.it level3.it level4.it \
-  level5.it level6.it level7.it level8.it level9.it level10.it gameover.it)
+  level5.it level6.it level7.it level8.it level9.it level10.it gameover.it \
+  intro.it levelfinished.it)
 AUDIOFILES := res/sfx.it $(MUSICFILES)
 export SOUNDBANK := res/soundbank
 

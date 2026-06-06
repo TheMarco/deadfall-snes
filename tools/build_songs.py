@@ -56,9 +56,26 @@ TRACKS = [
 BPM_OVERRIDE = {}
 
 
+def _wav_frames(name, fps=60):
+    """Play-once length of res/<name>_preview.wav in 60Hz frames. The preview is
+    the single-pass render, so its duration is exactly one playthrough -- audio.c
+    counts down this many frames then stops the track, so snesmod's unconditional
+    auto-loop never repeats a one-shot jingle (works even for 1-pattern modules,
+    whose order position never changes)."""
+    import wave
+    p = os.path.join(mid2it.RES, f"{name}_preview.wav")
+    if not os.path.exists(p):
+        return 0
+    with wave.open(p) as w:
+        return int(round(w.getnframes() / float(w.getframerate()) * fps))
+
+
 def write_layout_header(calm_start):
     """Emit include/music_layout.h: the order positions audio.c uses to jump
-    between the calm (level) and frantic (portal) sections of a combined module."""
+    between the calm (level) and frantic (portal) sections of a combined module,
+    plus the play-once frame lengths of the one-shot jingles."""
+    go = _wav_frames("gameover")
+    lf = _wav_frames("levelfinished")
     path = os.path.join(INCLUDE, "music_layout.h")
     with open(path, "w") as f:
         f.write(
@@ -70,8 +87,12 @@ def write_layout_header(calm_start):
             "#define MUSIC_LAYOUT_H\n\n"
             "#define MUSIC_FRANTIC_START 0\n"
             f"#define MUSIC_CALM_START    {calm_start}\n\n"
+            "/* One-shot jingle lengths (60Hz frames): audio.c stops the track after\n"
+            " * this many frames so it plays exactly once instead of looping. */\n"
+            f"#define MUSIC_GAMEOVER_FRAMES      {go}\n"
+            f"#define MUSIC_LEVELFINISHED_FRAMES {lf}\n\n"
             "#endif /* MUSIC_LAYOUT_H */\n")
-    print(f"wrote {path}  (MUSIC_CALM_START={calm_start})")
+    print(f"wrote {path}  (MUSIC_CALM_START={calm_start}, gameover={go}f, levelfinished={lf}f)")
 
 
 def main():

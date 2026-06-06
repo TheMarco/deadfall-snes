@@ -17,17 +17,16 @@
  * unregistered one => the linker discards it and its modules go silent. */
 #include "soundbank_banks.h"    /* SPC_SET_ALL_BANKS() (generated) */
 
-/* One-shot tracking: snesmod loops every module, so to play one ONCE we watch the
- * pattern position climb then drop (the loop wrap) and stop there (audio_process).
- * WRAM isn't zeroed at boot here, so these MUST be cleared in audio_init -- else a
- * garbage music_once would make audio_process poll spcGetMusicPosition before any
- * module plays. */
-static u8 music_once = 0;
-static u8 once_peak = 0;
+/* One-shot tracking: snesmod loops every module unconditionally, so to play one
+ * ONCE we stop it after a fixed number of frames == its single-playthrough length
+ * (MUSIC_*_FRAMES, generated from each jingle's preview render). A frame counter,
+ * not spcGetMusicPosition: the position reads stale right after a load (so the old
+ * wrap-detect killed the jingle instantly) and never changes for a 1-pattern
+ * module. WRAM isn't zeroed at boot, so this MUST be cleared in audio_init. */
+static u16 once_timer = 0;          /* >0: stop the music when it counts down to 0 */
 
 void audio_init(void) {
-    music_once = 0;                 /* statics aren't zero-initialised at boot */
-    once_peak = 0;
+    once_timer = 0;                 /* statics aren't zero-initialised at boot */
     spcBoot();                      /* boot sm-spc onto the SPC700 (once) */
 }
 
@@ -55,7 +54,7 @@ void audio_sfx(u8 idx) {
  * swap goes through audio_music_frantic (a cheap spcPlay), not this. */
 void audio_play_music(u8 module, u8 startpos) {
     u8 i;
-    music_once = 0;                 /* default: loop (cleared for every track but gameover) */
+    once_timer = 0;                 /* default: loop (one-shot callers set the timer after) */
     spcStop();
     spcLoad(module);
     for (i = 0; i < SFX_COUNT; i++) spcLoadEffect(i);
@@ -92,24 +91,25 @@ void audio_music_frantic(void) {
 }
 /* Victory/credits reuses the triumphant "Golden Anthem" (level 10's calm theme). */
 void audio_music_credits(void)  { audio_play_music(MOD_MUSIC_LEVEL10, MUSIC_CALM_START); }
+/* Title-screen theme: standalone module, loops. */
+void audio_music_intro(void)    { audio_play_music(MOD_MUSIC_INTRO, 0); }
 /* Game over: standalone module, played once from the top, then silence. */
 void audio_music_gameover(void) {
     audio_play_music(MOD_MUSIC_GAMEOVER, 0);
-    music_once = 1;
-    once_peak = 0;
+    once_timer = MUSIC_GAMEOVER_FRAMES;       /* stop after one playthrough */
+}
+/* Level-complete jingle: standalone module, played ONCE (no loop), then silence
+ * (the next level's theme starts when load_level runs). */
+void audio_music_levelfinished(void) {
+    audio_play_music(MOD_MUSIC_LEVELFINISHED, 0);
+    once_timer = MUSIC_LEVELFINISHED_FRAMES;  /* stop after one playthrough */
 }
 
-void audio_stop(void) { music_once = 0; spcStop(); }
+void audio_stop(void) { once_timer = 0; spcStop(); }
 
 void audio_process(void) {
-    if (music_once) {               /* stop a one-shot track once its pattern wraps */
-        u8 pos = spcGetMusicPosition();
-        if (pos < 64) {             /* ignore implausible readings */
-            if (pos > once_peak) once_peak = pos;             /* advancing */
-            else if (once_peak && pos < once_peak) {          /* looped back -> stop */
-                spcStop(); music_once = 0;
-            }
-        }
+    if (once_timer) {               /* one-shot track: stop it after its single length */
+        if (--once_timer == 0) spcStop();
     }
     spcProcess();                   /* feed the sound engine each frame */
 }

@@ -8,4 +8,9 @@
 #define MUSIC_FRANTIC_START 0
 #define MUSIC_CALM_START    4
 
+/* One-shot jingle lengths (60Hz frames): audio.c stops the track after
+ * this many frames so it plays exactly once instead of looping. */
+#define MUSIC_GAMEOVER_FRAMES      249
+#define MUSIC_LEVELFINISHED_FRAMES 177
+
 #endif /* MUSIC_LAYOUT_H */

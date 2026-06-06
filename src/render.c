@@ -1388,6 +1388,8 @@ void render_lc_banner(void) {
     u16 i;
     render_hide_sprites();      /* drop player/enemies first so only the BG wipes */
     render_wipe_out();          /* SMAS diamond wipe: the just-cleared level ripples to black */
+    audio_music_levelfinished(); /* play the level-complete jingle ONCE; the blocking SPC load
+                                  * happens here while the screen is blanked, so it's masked */
     setScreenOff();
     /* kitty image -> BG2 */
     dmaCopyVram((u8 *)kitty_pic_tbl[k], VRAM_BG2_TILES,
