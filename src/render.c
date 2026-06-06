@@ -5,6 +5,7 @@
 #include "world.h"
 #include "balance.h"
 #include "game.h"      /* game_map_dirty (set when the minimap/HUD changes) */
+#include "audio.h"     /* audio_process (keep music alive during blocking fades) */
 
 /* PVSnesLib shadows of the screen-designation registers. */
 extern u8 videoMode;     /* mirror of REG_TM (main screen) */
@@ -452,6 +453,99 @@ void render_minimap_blink(void) {
     else       { *((vuint8 *)0x2122) = 0x00; *((vuint8 *)0x2122) = 0x00; }  /* off (black) */
 }
 
+/* ---- SMAS diamond tile-wipe scene transition --------------------------------
+ * A per-tile "growing black triangle" dissolve that ripples out from the screen
+ * centre in a diamond (the Super Mario All-Stars look). The overlay lives on BG3
+ * (the front layer; its tiles carry the priority bit so they sit above BG1/BG2).
+ * 8 coverage tiles (0 = clear .. 7 = full black) are built into BG3's free slots;
+ * each cell picks a frame from its Manhattan distance to centre vs. a progress
+ * counter. The heavy scene build runs at full black (force-blanked), so there is
+ * no frozen frame. Blocking; pumps audio + waits a vblank per step. Because the
+ * wipe borrows BG3 (shared with the HUD/text), the reveal saves and restores the
+ * real BG3 map around itself. */
+#define WIPE_TILE    96      /* BG3 tile slots 96..111 (free: font 0..63, HUD 64..76) */
+#define WIPE_FRAMES  16      /* coverage gradations (one per 8x8 pixel-diagonal = smooth) */
+#define WIPE_CX      16      /* centre tile (256/8/2) */
+#define WIPE_CY      14      /* centre tile (224/8/2) */
+#define WIPE_MAXD    30      /* max Manhattan distance (corner 0,0 -> 16+14)          */
+#define WIPE_PMAX    (WIPE_MAXD + WIPE_FRAMES - 1)
+#define WIPE_STEP    5       /* progress per frame (speed; lower = slower)            */
+
+static u8  wipe_ready = 0;
+static u8  wipe_dist[32][32];      /* Manhattan distance from centre, per BG3 cell    */
+static u16 bg3_save[32 * 32];      /* HUD/scene BG3 backup, restored after the reveal  */
+
+/* Build the 8 growing-triangle 2bpp tiles (colour 2 = black in the BG3 sub-palette)
+ * and the per-cell distance table. Done once. */
+static void wipe_init(void) {
+    u8 td[WIPE_FRAMES * 16];        /* 8 tiles x 16 bytes (2bpp) */
+    u8 f, x, y, tx, ty;
+    for (f = 0; f < WIPE_FRAMES; f++) {
+        u8 *t = &td[f * 16];
+        for (y = 0; y < 8; y++) {
+            u8 p1 = 0;             /* colour 2 = plane1 set, plane0 clear */
+            for (x = 0; x < 8; x++)
+                if (f > 0 && (u8)(x + y) <= (u8)(f - 1)) p1 |= (u8)(0x80 >> x);
+            t[y * 2] = 0; t[y * 2 + 1] = p1;
+        }
+    }
+    dmaCopyVram(td, (u16)(VRAM_BG3_TILES + WIPE_TILE * 8), WIPE_FRAMES * 16);
+    for (ty = 0; ty < 32; ty++)
+        for (tx = 0; tx < 32; tx++) {
+            u8 dx = (u8)(tx > WIPE_CX ? tx - WIPE_CX : WIPE_CX - tx);
+            u8 dy = (u8)(ty > WIPE_CY ? ty - WIPE_CY : WIPE_CY - ty);
+            wipe_dist[ty][tx] = (u8)(dx + dy);
+        }
+    wipe_ready = 1;
+}
+
+/* Paint bg3map for progress p (0 = clear .. WIPE_PMAX = all black). Edges (far from
+ * centre) fill first, so it closes / opens as a diamond. */
+static void wipe_paint(u8 p) {
+    u16 pb = (u16)((BG3_TEXT_PAL << 10) | 0x2000);
+    u8 tx, ty;
+    for (ty = 0; ty < 32; ty++)
+        for (tx = 0; tx < 32; tx++) {
+            s16 fr = (s16)((s16)p - (s16)(WIPE_MAXD - wipe_dist[ty][tx]));
+            if (fr < 0) fr = 0; else if (fr > WIPE_FRAMES - 1) fr = WIPE_FRAMES - 1;
+            bg3map[ty * 32 + tx] = (u16)(pb + WIPE_TILE + (u8)fr);
+        }
+    bg3_dirty = 1; game_map_dirty = 1;     /* bg3map DMA'd next vblank */
+}
+
+static void wipe_anim(u8 from, u8 to) {
+    s16 p = from;
+    s8 dir = (to > from) ? WIPE_STEP : -WIPE_STEP;
+    if (!wipe_ready) wipe_init();
+    for (;;) {
+        wipe_paint((u8)p);
+        audio_process();
+        WaitForVBlank();
+        if (dir > 0) { if (p >= to) break; p = (s16)(p + dir); if (p > to) p = to; }
+        else         { if (p <= to) break; p = (s16)(p + dir); if (p < to) p = to; }
+    }
+}
+
+/* Ripple the current scene to full black, then force-blank for the heavy load. */
+void render_wipe_out(void) {
+    wipe_anim(0, WIPE_PMAX);
+    setScreenOff();
+}
+
+/* Save the freshly-built BG3 (HUD/text), start from full black, un-blank, ripple
+ * the new scene in, then put the real BG3 back (the wipe overwrote it). */
+void render_wipe_in(void) {
+    u16 i;
+    for (i = 0; i < 32 * 32; i++) bg3_save[i] = bg3map[i];
+    wipe_paint(WIPE_PMAX);                       /* bg3map = all black */
+    audio_process(); WaitForVBlank();            /* DMA the cover while still blanked */
+    setScreenOn();
+    wipe_anim(WIPE_PMAX, 0);                      /* ripple open */
+    for (i = 0; i < 32 * 32; i++) bg3map[i] = bg3_save[i];   /* restore HUD/text */
+    bg3_dirty = 1; game_map_dirty = 1;
+    audio_process(); WaitForVBlank();
+}
+
 /* Draw the player at its new-section entry position relative to the camera. */
 void render_slide_player(u16 cam) {
     Player *p = &game.player;
@@ -475,6 +569,58 @@ void render_slide_player(u16 cam) {
     oamSet(0, (u16)psx, (u16)(psy - OBJ_Y_FIX),
            3, 0, 0, (u16)(p->anim_frame * 32 + col * 2), OBJPAL_PLAYER);
     oamSetEx(0, OBJ_SMALL, OBJ_SHOW);
+}
+
+/* Map an entering-section pixel pos to its on-screen pos during the slide (same
+ * camera math as render_slide_player). Returns 0 if off-screen this frame. */
+static u8 slide_pos(s16 epx, s16 epy, u16 cam, u16 *osx, u16 *osy) {
+    s16 psx, psy;
+    if (slide_dir == DIR_UP || slide_dir == DIR_DOWN) {
+        psx = (s16)(PLAYFIELD_OFFSET_X + epx);
+        psy = (s16)(slide_stage_x + PLAYFIELD_OFFSET_Y + epy - cam);
+        if (psy < PLAYFIELD_OFFSET_Y || psy > 223) return 0;
+    } else {
+        psx = (s16)(slide_stage_x + epx - cam);
+        psy = (s16)(PLAYFIELD_OFFSET_Y + epy);
+        if (psx < 0 || psx > 255) return 0;
+    }
+    *osx = (u16)psx; *osy = (u16)(psy - OBJ_Y_FIX);
+    return 1;
+}
+
+/* Draw the entering section's enemies + robot at their slide-relative positions,
+ * so they glide in WITH the section instead of popping in when the slide finishes.
+ * Gameplay is frozen during the slide, so their grid positions are static. Call
+ * after render_hide_sprites + render_slide_player (which clear/own the rest). */
+void render_slide_entities(u16 cam) {
+    static const u8 eyeseq[4] = {0, 1, 2, 1};
+    Robot *r = &game.robots[0];
+    u16 sx, sy;
+    u8 i;
+    for (i = 0; i < MAX_ENEMIES; i++) {
+        Enemy *e = &game.enemies[i];
+        u16 id = (u16)((OAM_ENEMY_BASE + i) * 4);
+        if (i >= game.enemy_count || !(e->alive || e->dying)) continue;
+        if (e->section_row != game.cur_row || e->section_col != game.cur_col) continue;
+        if (!slide_pos(e->pixel_x, e->pixel_y, cam, &sx, &sy)) continue;
+        if (e->alive) {
+            oamSet(id, sx, sy, 3, 0, 0,
+                   (u16)(OBJN_ENEMY + e->anim_frame * 32 + e->direction * 2), OBJPAL_ENEMY);
+        } else {
+            u8 fr = (u8)((DEATH_ANIM_FRAMES * DEATH_ANIM_COUNT - e->death_timer) / DEATH_ANIM_FRAMES);
+            if (fr >= DEATH_ANIM_COUNT) fr = (u8)(DEATH_ANIM_COUNT - 1);
+            oamSet(id, sx, sy, 3, 0, 0, (u16)(OBJN_EDEATH + fr * 2), OBJPAL_EDEATH);
+        }
+        oamSetEx(id, OBJ_SMALL, OBJ_SHOW);
+    }
+    if (game.robot_count > 0 && r->alive &&
+        r->section_row == game.cur_row && r->section_col == game.cur_col &&
+        slide_pos(r->pixel_x, r->pixel_y, cam, &sx, &sy)) {
+        u16 id = (u16)(OAM_ROBOT * 4);
+        oamSet(id, sx, sy, 3, 0, 0,
+               (u16)(OBJN_ROBOT + eyeseq[r->eye_index & 3] * 32 + r->direction * 2), OBJPAL_ROBOT);
+        oamSetEx(id, OBJ_SMALL, OBJ_SHOW);
+    }
 }
 
 void render_slide_end(void) {
@@ -827,6 +973,7 @@ void render_init(void) {
     dmaCopyVram((u8 *)hud_halfbar_tile, (u16)(VRAM_BG3_TILES + HUD_HALFBAR_TILE * 8), 16);  /* bar lower edge */
     bgSetGfxPtr(2, VRAM_BG3_TILES);
     bgSetMapPtr(2, VRAM_BG3_MAP, SC_32x32);
+    wipe_init();   /* upload the diamond-wipe tiles now (boot, screen blanked = safe DMA) */
     /* Nudge the whole BG3 layer (HUD bar + all scene text) up 2px: the font
      * glyphs are top-aligned in their tile, so on tile-row 1 the text sat at
      * y8-14 with a dead black row at y15. Scrolling up 2px lifts the text and
@@ -897,25 +1044,76 @@ void render_falls_hide(void) {
         oamSetVisible((u16)((OAM_FALL_BASE + i) * 4), OBJ_HIDE);
 }
 
+/* Draw the block currently sliding from a push (gem or boulder) as a 16x16 OBJ at
+ * screen pixel (px,py) -- reuses the falling-tile graphics so it matches a fall. */
+void render_push(u8 type, u16 px, u16 py, u8 dmg) {
+    u16 name = (type == TILE_BOULDER) ? OBJN_BOULDER_FALL
+                                      : (u16)(OBJN_GEM_FALL + (dmg > 2 ? 2 : dmg) * 2);
+    u16 id = (u16)(OAM_PUSH * 4);
+    oamSet(id, px, (u16)(py - OBJ_Y_FIX), 3, 0, 0, name, OBJPAL_FALLS);
+    oamSetEx(id, OBJ_SMALL, OBJ_SHOW);
+}
+
+void render_push_hide(void) {
+    oamSetVisible((u16)(OAM_PUSH * 4), OBJ_HIDE);
+}
+
+/* If a sprite (enemy or robot) is mid-crossing from an ADJACENT section INTO the
+ * current view, return 1 and its on-screen pixel via *sx/*sy -- positioned just off
+ * the matching edge so it slides in. An exiting sprite already slides off the
+ * current section's edge (it stays `here` until its move ends); this fills in the
+ * entering half, which otherwise stayed hidden until the section flip snapped it
+ * onto the edge cell (the "pop"). Off-left / off-top use the OBJ's 9-bit X /
+ * wrapped Y. Generic so render_enemies and render_robot share it. */
+static u8 sprite_entering(u8 srow, u8 scol, s16 pixel_x, s16 pixel_y,
+                          u8 is_moving, u8 target_x, u8 target_y, u16 *sx, u16 *sy) {
+    u8 cr = game.cur_row, cc = game.cur_col;
+    u8 wr = game.world_rows, wc = game.world_cols;
+    s16 px = (s16)(PLAYFIELD_OFFSET_X + pixel_x);
+    s16 py = (s16)(PLAYFIELD_OFFSET_Y + pixel_y - OBJ_Y_FIX);
+    if (!is_moving) return 0;
+    /* Only slide-in when the crossing edge is UNAMBIGUOUS. On a world that is only
+     * 2 sections wide/tall the wrap makes the neighbour reachable from BOTH sides
+     * at once, so an entering sprite could appear at the "far" edge (a confusing
+     * flash); there we let it pop at its cell instead (wc>2 / wr>2 gate). */
+    if (wc > 2 && srow == cr && scol == (u8)((cc + wc - 1) % wc)
+        && (s8)target_x >= GRID_COLS)      px = (s16)(px - PLAYFIELD_WIDTH);   /* from left   */
+    else if (wc > 2 && srow == cr && scol == (u8)((cc + 1) % wc)
+        && (s8)target_x < 0)               px = (s16)(px + PLAYFIELD_WIDTH);   /* from right  */
+    else if (wr > 2 && scol == cc && srow == (u8)((cr + wr - 1) % wr)
+        && (s8)target_y >= GRID_ROWS)      py = (s16)(py - PLAYFIELD_HEIGHT);  /* from top    */
+    else if (wr > 2 && scol == cc && srow == (u8)((cr + 1) % wr)
+        && (s8)target_y < 0)               py = (s16)(py + PLAYFIELD_HEIGHT);  /* from bottom */
+    else return 0;
+    *sx = (u16)px; *sy = (u16)py;
+    return 1;
+}
+
 void render_enemies(void) {
     u8 i;
     for (i = 0; i < MAX_ENEMIES; i++) {
         u16 id = (u16)((OAM_ENEMY_BASE + i) * 4);
         Enemy *e = &game.enemies[i];
+        u16 sx, sy;
         u8 here = (u8)(i < game.enemy_count &&
                        e->section_row == game.cur_row && e->section_col == game.cur_col);
         if (here && e->alive) {
-            u16 sx = (u16)(PLAYFIELD_OFFSET_X + e->pixel_x);
-            u16 sy = (u16)(PLAYFIELD_OFFSET_Y + e->pixel_y - OBJ_Y_FIX);
             u16 gfx = (u16)(OBJN_ENEMY + e->anim_frame * 32 + e->direction * 2);
-            oamSet(id, sx, sy, 3, 0, 0, gfx, OBJPAL_ENEMY);
+            oamSet(id, (u16)(PLAYFIELD_OFFSET_X + e->pixel_x),
+                   (u16)(PLAYFIELD_OFFSET_Y + e->pixel_y - OBJ_Y_FIX), 3, 0, 0, gfx, OBJPAL_ENEMY);
+            oamSetEx(id, OBJ_SMALL, OBJ_SHOW);
+        } else if (e->alive && i < game.enemy_count &&
+                   sprite_entering(e->section_row, e->section_col, e->pixel_x, e->pixel_y,
+                                   e->is_moving, e->target_x, e->target_y, &sx, &sy)) {
+            u16 gfx = (u16)(OBJN_ENEMY + e->anim_frame * 32 + e->direction * 2);
+            oamSet(id, sx, sy, 3, 0, 0, gfx, OBJPAL_ENEMY);   /* sliding in from an adjacent section */
             oamSetEx(id, OBJ_SMALL, OBJ_SHOW);
         } else if (here && e->dying) {
-            u16 sx = (u16)(PLAYFIELD_OFFSET_X + e->pixel_x);
-            u16 sy = (u16)(PLAYFIELD_OFFSET_Y + e->pixel_y - OBJ_Y_FIX);
             u8 fr = (u8)((DEATH_ANIM_FRAMES * DEATH_ANIM_COUNT - e->death_timer) / DEATH_ANIM_FRAMES);
             if (fr >= DEATH_ANIM_COUNT) fr = (u8)(DEATH_ANIM_COUNT - 1);
-            oamSet(id, sx, sy, 3, 0, 0, (u16)(OBJN_EDEATH + fr * 2), OBJPAL_EDEATH);
+            oamSet(id, (u16)(PLAYFIELD_OFFSET_X + e->pixel_x),
+                   (u16)(PLAYFIELD_OFFSET_Y + e->pixel_y - OBJ_Y_FIX), 3, 0, 0,
+                   (u16)(OBJN_EDEATH + fr * 2), OBJPAL_EDEATH);
             oamSetEx(id, OBJ_SMALL, OBJ_SHOW);
         } else {
             oamSetVisible(id, OBJ_HIDE);
@@ -927,15 +1125,22 @@ void render_robot(void) {
     static const u8 eyeseq[4] = {0, 1, 2, 1};   /* pulse sequence -> sprite row */
     Robot *r = &game.robots[0];
     u16 id = (u16)(OAM_ROBOT * 4);
-    if (game.robot_count > 0 && r->alive &&
-        r->section_row == game.cur_row && r->section_col == game.cur_col) {
-        u16 sx = (u16)(PLAYFIELD_OFFSET_X + r->pixel_x);
-        u16 sy = (u16)(PLAYFIELD_OFFSET_Y + r->pixel_y - OBJ_Y_FIX);
+    u8 here = (u8)(game.robot_count > 0 && r->alive &&
+                   r->section_row == game.cur_row && r->section_col == game.cur_col);
+    u16 sx, sy;
+    if (here) {
+        sx = (u16)(PLAYFIELD_OFFSET_X + r->pixel_x);
+        sy = (u16)(PLAYFIELD_OFFSET_Y + r->pixel_y - OBJ_Y_FIX);
+    } else if (!(game.robot_count > 0 && r->alive &&
+                 sprite_entering(r->section_row, r->section_col, r->pixel_x, r->pixel_y,
+                                 r->is_moving, r->target_x, r->target_y, &sx, &sy))) {
+        oamSetVisible(id, OBJ_HIDE);
+        return;
+    }
+    {
         u16 gfx = (u16)(OBJN_ROBOT + eyeseq[r->eye_index & 3] * 32 + r->direction * 2);
         oamSet(id, sx, sy, 3, 0, 0, gfx, OBJPAL_ROBOT);
         oamSetEx(id, OBJ_SMALL, OBJ_SHOW);
-    } else {
-        oamSetVisible(id, OBJ_HIDE);
     }
 }
 
@@ -1177,8 +1382,9 @@ void render_lc_banner(void) {
                  ? game.current_level - 1 : 8);
     u16 *src = (u16 *)kitty_map_tbl[k];
     u16 i;
+    render_hide_sprites();      /* drop player/enemies first so only the BG wipes */
+    render_wipe_out();          /* SMAS diamond wipe: the just-cleared level ripples to black */
     setScreenOff();
-    render_hide_sprites();
     /* kitty image -> BG2 */
     dmaCopyVram((u8 *)kitty_pic_tbl[k], VRAM_BG2_TILES,
                 (u16)(kitty_end_tbl[k] - kitty_pic_tbl[k]));
@@ -1200,7 +1406,7 @@ void render_lc_banner(void) {
     scr_bg1x = 0; scr_bg1y = 0; scr_bg2x = 0; scr_bg2y = 0; scroll_dirty = 0;
     bgSetScroll(0, 0, 0);
     bgSetScroll(1, 0, 0);
-    setScreenOn();
+    render_wipe_in();           /* SMAS diamond wipe: the banner ripples in (un-blanks itself) */
 }
 
 void render_hide_sprites(void) {

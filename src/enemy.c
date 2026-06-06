@@ -26,22 +26,6 @@ static u16 separation_penalty(Enemy *e, s8 nx, s8 ny, Enemy *all, u8 count) {
     return pen;
 }
 
-/* TRUE if another live enemy in the same section occupies cell (cx,cy) -- either
- * resting there, or sliding into it (target) so two never overlap or pass through
- * each other. Cross-section candidate cells are allowed (handled elsewhere). */
-static u8 enemy_cell_blocked(Enemy *e, s8 cx, s8 cy, Enemy *all, u8 count) {
-    u8 i;
-    if (cx < 0 || cx >= GRID_COLS || cy < 0 || cy >= GRID_ROWS) return 0;
-    for (i = 0; i < count; i++) {
-        Enemy *o = &all[i];
-        if (o == e || !o->alive) continue;
-        if (o->section_row != e->section_row || o->section_col != e->section_col) continue;
-        if (o->x == (u8)cx && o->y == (u8)cy) return 1;                    /* its cell */
-        if (o->is_moving && (s8)o->target_x == cx && (s8)o->target_y == cy) return 1; /* its destination */
-    }
-    return 0;
-}
-
 static void enemy_apply_move(Enemy *e, s8 dx, s8 dy) {
     if (dx < 0)      e->direction = DIR_LEFT;
     else if (dx > 0) e->direction = DIR_RIGHT;
@@ -65,7 +49,7 @@ static void enemy_apply_move(Enemy *e, s8 dx, s8 dy) {
 
 static void enemy_move_towards_player(Enemy *e, Enemy *all, u8 count) {
     Player *p = &game.player;
-    u8 same, i, found = 0;
+    u8 same, i, found = 0, allow_cross;
     s8 best_dx = 0, best_dy = 0;
     u16 best = 0xFFFF;
     static const s8 dirs[4][2] = {{1,0},{-1,0},{0,1},{0,-1}};
@@ -73,13 +57,24 @@ static void enemy_move_towards_player(Enemy *e, Enemy *all, u8 count) {
     if (!p->alive) return;
     same = (u8)(p->section_row == e->section_row && p->section_col == e->section_col);
 
+    /* Stickiness: an enemy already in the player's section pursues WITHIN it (via
+     * the BFS field) and won't step across a boundary -- so a still player doesn't
+     * get an enemy wandering out and circling back. A cross-out is only permitted
+     * as a LAST RESORT (boxed in with no in-section move). When the enemy is in a
+     * DIFFERENT section, crossing toward the player is the whole point -> allowed. */
+    allow_cross = (u8)(!same);
+    do {
     for (i = 0; i < 4; i++) {
         s8 dx = dirs[i][0], dy = dirs[i][1];
         s8 nx, ny;
         u16 d, score;
+        u8 rev;
         if (!ai_can_move(e->section_row, e->section_col, e->x, e->y, dx, dy)) continue;
         nx = (s8)(e->x + dx); ny = (s8)(e->y + dy);
-        if (enemy_cell_blocked(e, nx, ny, all, count)) continue;   /* never overlap/pass another enemy */
+        if (!allow_cross && (nx < 0 || nx >= GRID_COLS || ny < 0 || ny >= GRID_ROWS))
+            continue;     /* keep a same-section enemy inside the player's section */
+        /* No hard enemy-vs-enemy block here -- the JS AI lets enemies share/pass
+         * cells and only DISCOURAGES crowding via the separation penalty below. */
 
         if (same) {
             u8 bd = ai_dist((u8)nx, (u8)ny);   /* shared player distance field */
@@ -95,10 +90,22 @@ static void enemy_move_towards_player(Enemy *e, Enemy *all, u8 count) {
             d = (u16)(iabs(xd) + iabs(yd));
         }
 
-        /* score = dist*2 + penalty*3 (=*1.5*2) + jitter(0..1) */
-        score = (u16)(d * 2 + separation_penalty(e, nx, ny, all, count) * 3 + (ai_rng() & 1));
+        /* Anti-oscillation: penalise reversing the last move (e->direction holds it
+         * until enemy_apply_move overwrites it below) so the enemy commits to a
+         * heading instead of ping-ponging across a boundary on a wrapping world. */
+        rev = (u8)((e->direction == DIR_LEFT  && dx > 0) ||
+                   (e->direction == DIR_RIGHT && dx < 0) ||
+                   (e->direction == DIR_UP    && dy > 0) ||
+                   (e->direction == DIR_DOWN  && dy < 0));
+
+        /* score = dist*2 + penalty*3 (=*1.5*2) + jitter(0..1) + reverse bias */
+        score = (u16)(d * 2 + separation_penalty(e, nx, ny, all, count) * 3 + (ai_rng() & 1)
+                      + (rev ? ENEMY_REVERSE_PENALTY : 0));
         if (score < best) { best = score; best_dx = dx; best_dy = dy; found = 1; }
     }
+    if (found || allow_cross) break;   /* got a move, or already tried with cross-out */
+    allow_cross = 1;                   /* same-section but boxed in -> allow a cross-out */
+    } while (1);
     if (found) enemy_apply_move(e, best_dx, best_dy);
 }
 

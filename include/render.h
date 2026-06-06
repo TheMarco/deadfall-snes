@@ -60,6 +60,7 @@
 #define OAM_ZAP_BASE   7     /* slots 7..9 (up to ROBOT_ZAP_RANGE segments) */
 #define OAM_FALL_BASE  10    /* slots 10..(10+MAX_FALL_ANIMS-1): smooth falling tiles */
 #define OAM_MINIMAP    26    /* the 4-colour minimap sprite (top-right) */
+#define OAM_PUSH       27    /* the block currently sliding from a push */
 #define MAX_FALL_ANIMS 16
 
 /* BG1 metatile indices (each = 4 sequential 8x8 tiles). 20 metatiles total. */
@@ -95,14 +96,19 @@ void render_slide_begin(u8 dir, u8 adj_row, u8 adj_col); /* stage adjacent secti
 void render_slide_scroll(u16 cam);  /* shadow BG1+BG2 scroll during a slide (applied in vblank) */
 void render_apply_scroll(void);     /* write shadowed scroll to PPU regs; call in vblank */
 void render_apply_alarm(void);      /* pulse the red alarm vignette via color math (vblank) */
+void render_wipe_out(void);         /* SMAS diamond tile-wipe: ripple scene to black, blank   */
+void render_wipe_in(void);          /* SMAS diamond tile-wipe: un-blank, ripple new scene in  */
 void render_minimap_blink(void);    /* blink the minimap exit dot via 1 CGRAM write (vblank) */
 void render_slide_player(u16 cam);  /* draw player entering the new section during a slide */
+void render_slide_entities(u16 cam); /* draw entering section's enemies+robot during a slide */
 void render_slide_end(void);        /* back to single-screen, scroll 0 */
 void render_set_cell(u8 gx, u8 gy); /* update just one grid cell's 4 BG entries (cheap)       */
 void render_crush_cell(u8 gx, u8 gy, u8 mt); /* draw an explicit metatile (shatter frame) at a cell */
 void render_clear_cell(u8 gx, u8 gy); /* blank a grid cell's BG entries (tile is in-flight as OBJ) */
 void render_fall(u8 slot, u8 type, u16 px, u16 py, u8 dmg); /* draw a falling tile OBJ (gem shows its damage frame) */
 void render_falls_hide(void);       /* hide all falling-tile OBJ slots                         */
+void render_push(u8 type, u16 px, u16 py, u8 dmg);  /* draw the sliding pushed block OBJ (gem/boulder) */
+void render_push_hide(void);        /* hide the pushed-block OBJ slot                          */
 void render_flush_map(void);        /* DMA the RAM tilemap to VRAM (call in vblank)            */
 void render_vblank(void);           /* NMI/vblank hook (nmiSet): flush map inside vblank       */
 void render_player(void);      /* place the player sprite from its pixel position     */

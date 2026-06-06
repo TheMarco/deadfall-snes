@@ -58,7 +58,7 @@ static void robot_update_movement(Robot *r) {
 
 static void robot_move_towards(Robot *r) {
     Player *p = &game.player;
-    u8 same, i, found = 0;
+    u8 same, i, found = 0, allow_cross;
     s8 best_dx = 0, best_dy = 0;
     u16 best = 0xFFFF;
     static const s8 dirs[4][2] = {{1,0},{-1,0},{0,1},{0,-1}};
@@ -66,11 +66,19 @@ static void robot_move_towards(Robot *r) {
     if (!p->alive) return;
     same = (u8)(p->section_row == r->section_row && p->section_col == r->section_col);
 
+    /* Same anti-oscillation as the enemies (see enemy.c): stay in the player's
+     * section when already in it, and bias against reversing the last move, so the
+     * robot commits to a heading instead of ping-ponging across a boundary. */
+    allow_cross = (u8)(!same);
+    do {
     for (i = 0; i < 4; i++) {
         s8 dx = dirs[i][0], dy = dirs[i][1], nx, ny;
         u16 d, score;
+        u8 rev;
         if (!ai_can_move(r->section_row, r->section_col, r->x, r->y, dx, dy)) continue;
         nx = (s8)(r->x + dx); ny = (s8)(r->y + dy);
+        if (!allow_cross && (nx < 0 || nx >= GRID_COLS || ny < 0 || ny >= GRID_ROWS))
+            continue;
         if (same) {
             u8 bd = ai_dist((u8)nx, (u8)ny);   /* shared player distance field */
             d = (bd != 255) ? bd : (u16)(iabs((s16)(nx - p->x)) + iabs((s16)(ny - p->y)));
@@ -82,9 +90,16 @@ static void robot_move_towards(Robot *r) {
             d = (u16)(iabs(ai_wrapped_diff(pgx, egx, (s16)(game.world_cols * GRID_COLS))) +
                       iabs(ai_wrapped_diff(pgy, egy, (s16)(game.world_rows * GRID_ROWS))));
         }
-        score = (u16)(d * 2 + (ai_rng() & 1));
+        rev = (u8)((r->direction == DIR_LEFT  && dx > 0) ||
+                   (r->direction == DIR_RIGHT && dx < 0) ||
+                   (r->direction == DIR_UP    && dy > 0) ||
+                   (r->direction == DIR_DOWN  && dy < 0));
+        score = (u16)(d * 2 + (ai_rng() & 1) + (rev ? ENEMY_REVERSE_PENALTY : 0));
         if (score < best) { best = score; best_dx = dx; best_dy = dy; found = 1; }
     }
+    if (found || allow_cross) break;
+    allow_cross = 1;
+    } while (1);
     if (found) robot_apply_move(r, best_dx, best_dy);
 }
 

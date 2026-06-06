@@ -33,6 +33,13 @@ static FallAnim fall_anim[MAX_FALL_ANIMS];
 static u8 fall_anim_n;
 #define FALL_DY 5                /* px/frame -- faster falling to match the original feel */
 
+/* A pushed gem/boulder slides one cell as a 16x16 OBJ, synced with the player's
+ * own move (same PLAYER_MOVE_FRAMES), so it glides instead of popping. The grid
+ * already holds it at the destination (player_move); its BG cell is blanked
+ * during the slide and redrawn on arrival. Only one push is ever in flight (the
+ * player can't move again until its move finishes). */
+static struct { u8 active, gx, gy, type, dmg; s16 sx, ex; u8 timer; } push_anim;
+
 static u8 crush_pending;         /* a destroy is mid-shatter -> run gravity when it ends */
 static u8 crush_completed;        /* a mine just destroyed a tile -> lock mining until the
                                    * mine button is released+re-pressed (original crushCompleted),
@@ -203,6 +210,7 @@ static void load_level(u8 n) {
     u8 sx, sy, sr, sc, i;
     u16 md;
 
+    render_wipe_out();       /* SMAS diamond wipe: the current scene ripples out to black */
     world_load_level(n);
     player_set_spawn(game.portal.x, game.portal.y, game.portal_row, game.portal_col);
 
@@ -234,6 +242,7 @@ static void load_level(u8 n) {
     game.crush_safety_timer = 0;
     game.death_pending = 0;
     fall_anim_n = 0;              /* drop any in-flight falling-tile anims */
+    push_anim.active = 0; render_push_hide();   /* drop any in-flight push slide */
     for (i = 0; i < 16; i++) game.cell_anims[i].active = 0;  /* drop shatter anims */
     crush_pending = 0;
     crush_completed = 0;
@@ -261,9 +270,13 @@ static void load_level(u8 n) {
     render_clear_screen();        /* wipe any leftover scene text (e.g. title) from BG3 */
     render_bg2_reset();           /* start section = BG2 phase 0 */
     render_build_map();
+    audio_music_level(n);        /* this level's chiptune theme -- the blocking SPC upload
+                                  * runs here while the wipe holds the screen blanked */
     render_load_background();     /* load the current section's backdrop (forced blank) */
-    audio_music_level(n);        /* this level's chiptune theme */
+    setScreenOff();               /* render_load_background re-enabled the screen; keep it
+                                   * blanked until the wipe reveals (no sharp pre-flash) */
     game_map_dirty = 1;
+    render_wipe_in();            /* SMAS diamond wipe: the new level ripples in from black */
 }
 
 void game_init(void) {
@@ -610,8 +623,16 @@ static void do_move(s8 dx, s8 dy) {
         }
     } else if (r.pushed) {
         render_set_cell(p->x, p->y);     /* tile vacated this cell */
-        if (!r.cross_push && (p->x + dx) >= 0 && (p->x + dx) < GRID_COLS)
-            render_set_cell((u8)(p->x + dx), p->y);   /* tile's new cell */
+        if (!r.cross_push && (p->x + dx) >= 0 && (p->x + dx) < GRID_COLS) {
+            u8 bx = (u8)(p->x + dx);     /* the block's new cell (grid already holds it) */
+            push_anim.active = 1;
+            push_anim.gx = bx; push_anim.gy = p->y; push_anim.type = r.pushed_tile;
+            push_anim.dmg = (r.pushed_tile == TILE_GEM) ? world_get_damage(bx, p->y) : 0;
+            push_anim.sx = (s16)(p->x * TILE_SIZE);   /* slide from the block's OLD cell... */
+            push_anim.ex = (s16)(bx * TILE_SIZE);     /* ...to its new cell, over the move  */
+            push_anim.timer = PLAYER_MOVE_FRAMES;
+            render_clear_cell(bx, p->y);              /* blank BG; the OBJ shows it sliding */
+        }
         game_map_dirty = 1;
         push_grav_timer = 12;            /* gravity 200ms after a push (grace), like JS */
     } else if (r.collected_extra_life) {
@@ -620,6 +641,28 @@ static void do_move(s8 dx, s8 dy) {
         if (game.lives < 9) game.lives++;
         audio_sfx(SFX_EXTRALIFE);
         game_map_dirty = 1;
+    }
+}
+
+/* Advance the pushed-block slide one frame: interpolate sx->ex exactly like
+ * player_tick interpolates the player, draw the OBJ, and on the last frame stamp
+ * the block onto BG1 and hide the OBJ. Call once per frame from game_update. */
+static void update_push(void) {
+    if (!push_anim.active) return;
+    if (push_anim.timer) push_anim.timer--;
+    if (push_anim.timer == 0) {
+        push_anim.active = 0;
+        render_set_cell(push_anim.gx, push_anim.gy);   /* block lands on BG1 */
+        render_push_hide();
+        game_map_dirty = 1;
+    } else {
+        s16 elapsed = (s16)(PLAYER_MOVE_FRAMES - push_anim.timer);
+        s16 cx = (s16)(push_anim.sx +
+                       (s16)((push_anim.ex - push_anim.sx) * elapsed) / PLAYER_MOVE_FRAMES);
+        render_push(push_anim.type,
+                    (u16)(PLAYFIELD_OFFSET_X + cx),
+                    (u16)(PLAYFIELD_OFFSET_Y + push_anim.gy * TILE_SIZE),
+                    push_anim.dmg);
     }
 }
 
@@ -664,8 +707,9 @@ void game_update(void) {
             /* LEFT/UP enter from the near side, so the camera runs 256 -> 0. */
             if (game.trans_dir == DIR_LEFT || game.trans_dir == DIR_UP) cam = (u16)(256 - cam);
             render_slide_scroll(cam);
-            render_hide_sprites();                         /* enemies/robot hidden mid-slide */
+            render_hide_sprites();                         /* clear all; re-show the entering ones */
             render_slide_player(cam);                      /* player entering the new section */
+            render_slide_entities(cam);                    /* + that section's enemies/robot */
             /* Scroll is applied a frame late (vblank), so hold ONE frame at the
              * fully-aligned cam=256 before committing -- otherwise the commit
              * snaps the last ~8px (slide looked like it ended early + jumped). */
@@ -1031,6 +1075,7 @@ void game_update(void) {
     }
 
     render_player();
+    update_push();                       /* slide a just-pushed block (OBJ) into place */
     render_enemies();
     render_robot();
     render_lightning();

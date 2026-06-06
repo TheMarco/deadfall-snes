@@ -84,6 +84,14 @@
 #define BFS_MAX_DEPTH       15
 #define BFS_QUEUE_SIZE      256
 
+/* Anti-oscillation: bias an enemy AGAINST immediately undoing its last move, so a
+ * still player doesn't get an enemy ping-ponging across a section boundary (the
+ * greedy wrapped-Manhattan heuristic is ambiguous on small wrapping worlds). In
+ * score units (distance is *2), so 3 ~= 1.5 tiles: a reverse is taken only when it
+ * is clearly better (e.g. the player is right behind), never to break a near-tie.
+ * Set to 0 to get the exact JS behaviour back. */
+#define ENEMY_REVERSE_PENALTY 3
+
 /* ---- Fixed point (8.8) for sub-pixel movement ---- */
 #define FP_SHIFT    8
 #define FP_ONE      (1 << FP_SHIFT)
