@@ -113,40 +113,42 @@ static const u8 hud_colon_tile[16] = {
     0x00, 0xFF    /* ........ */
 };
 
-/* Enemy edge-warning strips (the original draws a red 3px gradient on a threatened
- * playfield edge; red is palette-blocked here so this is a white 3px strip). Two
- * 2bpp tiles: a TOP strip (white rows 0-2) used for up/down (V-flip = down) and a
- * LEFT strip (white cols 0-2) for left/right (H-flip = right). */
-/* Enemy edge-warning bars: a WHITE dither gradient that fades from the playfield
- * edge inward (2 tiles / 16px deep). White is the BG3 text palette's index1 (CGRAM
- * 17), so this needs no extra colours -- just ordered-dither tiles (plane0 = white
- * pixels, plane1 = 0). VNEAR/VFAR = vertical fade (top edge; V-flip for bottom);
- * HNEAR/HFAR = horizontal fade (left edge; H-flip for right). NEAR = dense at the
- * edge -> ~50%; FAR = ~50% -> transparent. */
+/* Enemy edge-warning strips: a RED dither gradient on a threatened playfield edge,
+ * matching the original (which draws a red 3px edge gradient). A TOP strip for up/down
+ * (V-flip = down) and a LEFT strip for left/right (H-flip = right), fading from the
+ * edge inward (2 tiles / 16px). */
+/* Drawn on BG3 in the text sub-palette's index 3 = RED (CGRAM 19). That slot used to
+ * be the markers' icy-blue; the asset pipeline now parks that blue in the otherwise-
+ * free CGRAM 29 (pal1 idx 13) and frees idx 3 for red, so white text (idx 1) and the
+ * black HUD-bar edge (idx 2) are untouched and the portal/spawn/robot markers keep
+ * their colour. The dither mask therefore lives in BOTH bitplanes (= index 3); the
+ * HUD-black rows stay index 2 (plane1 only). VNEAR/VFAR = vertical fade (top edge;
+ * V-flip for bottom); HNEAR/HFAR = horizontal fade. NEAR = dense (~50%) at the edge;
+ * FAR = ~50% -> transparent. */
 /* Vertical fade = a CONTINUOUS dithered gradient over 3 tiles, dense at the edge
  * (NOT solid -- a solid head reads as a flat bar). VTOP is the top-edge tile: its
- * top 3 rows are black to carry the HUD bar's lower edge, then the dense dither
- * head. VBOT is the same dense head WITHOUT the HUD black (bottom edge). VNEAR
+ * top 3 rows are black (index 2) to carry the HUD bar's lower edge, then the dense
+ * dither head. VBOT is the same dense head WITHOUT the HUD black (bottom edge). VNEAR
  * continues the fade, VFAR finishes it to transparent. (Horizontal H* tiles for
  * the left/right bars are unchanged.) */
-static const u8 warn_vtop[16]  = { 0x00,0xFF, 0x00,0xFF, 0x00,0xFF, 0xB6,0, 0x6D,0, 0xAA,0, 0x55,0, 0xAA,0 };
-static const u8 warn_vbot[16]  = { 0xB6,0, 0x6D,0, 0xAA,0, 0x55,0, 0xAA,0, 0x92,0, 0x49,0, 0x24,0 };
-static const u8 warn_vnear[16] = { 0x55,0, 0xA4,0, 0x49,0, 0x92,0, 0x22,0, 0x44,0, 0x80,0, 0x08,0 };
-static const u8 warn_vfar[16]  = { 0x40,0, 0x04,0, 0x20,0, 0x00,0, 0x00,0, 0x00,0, 0x00,0, 0x00,0 };
-static const u8 warn_hnear[16] = { 0xFE,0, 0xD5,0, 0xFA,0, 0xF5,0, 0xFE,0, 0xD5,0, 0xFA,0, 0xF5,0 };
-static const u8 warn_hfar[16]  = { 0xA8,0, 0x40,0, 0xAA,0, 0x00,0, 0xA8,0, 0x40,0, 0xAA,0, 0x00,0 };
+static const u8 warn_vtop[16]  = { 0x00,0xFF, 0x00,0xFF, 0x00,0xFF, 0xB6,0xB6, 0x6D,0x6D, 0xAA,0xAA, 0x55,0x55, 0xAA,0xAA };
+static const u8 warn_vbot[16]  = { 0xB6,0xB6, 0x6D,0x6D, 0xAA,0xAA, 0x55,0x55, 0xAA,0xAA, 0x92,0x92, 0x49,0x49, 0x24,0x24 };
+static const u8 warn_vnear[16] = { 0x55,0x55, 0xA4,0xA4, 0x49,0x49, 0x92,0x92, 0x22,0x22, 0x44,0x44, 0x80,0x80, 0x08,0x08 };
+static const u8 warn_vfar[16]  = { 0x40,0x40, 0x04,0x04, 0x20,0x20, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00 };
+static const u8 warn_hnear[16] = { 0xFE,0xFE, 0xD5,0xD5, 0xFA,0xFA, 0xF5,0xF5, 0xFE,0xFE, 0xD5,0xD5, 0xFA,0xFA, 0xF5,0xF5 };
+static const u8 warn_hfar[16]  = { 0xA8,0xA8, 0x40,0x40, 0xAA,0xAA, 0x00,0x00, 0xA8,0xA8, 0x40,0x40, 0xAA,0xAA, 0x00,0x00 };
 /* Side-bar TOP caps: the side (horizontal) bars run up into the HUD halfbar row,
  * where the top 3 rows (screen y14-16) are the HUD bar's black lower edge. These
- * carry that black in rows 0-2 and the horizontal-gradient white only from row 3
+ * carry that black in rows 0-2 and the horizontal-gradient red only from row 3
  * (y17) down, so the side bars reach the playfield top WITHOUT painting over the
  * HUD. (HCN = the dense col-0/31 edge; HCF = the fading col-1/30.) */
-static const u8 warn_hcn[16]   = { 0x00,0xFF, 0x00,0xFF, 0x00,0xFF, 0xF5,0, 0xFE,0, 0xD5,0, 0xFA,0, 0xF5,0 };
-static const u8 warn_hcf[16]   = { 0x00,0xFF, 0x00,0xFF, 0x00,0xFF, 0x00,0, 0xA8,0, 0x40,0, 0xAA,0, 0x00,0 };
+static const u8 warn_hcn[16]   = { 0x00,0xFF, 0x00,0xFF, 0x00,0xFF, 0xF5,0xF5, 0xFE,0xFE, 0xD5,0xD5, 0xFA,0xFA, 0xF5,0xF5 };
+static const u8 warn_hcf[16]   = { 0x00,0xFF, 0x00,0xFF, 0x00,0xFF, 0x00,0x00, 0xA8,0xA8, 0x40,0x40, 0xAA,0xAA, 0x00,0x00 };
 /* RIGHT-side top caps: same as HCN/HCF but TRANSPARENT (not black) in rows 0-2,
  * because cols 30-31 hold the minimap OBJ -- a black BG3 tile there (high prio)
  * would clip the minimap's bottom pixels. Transparent lets the minimap show. */
-static const u8 warn_hcnt[16]  = { 0x00,0, 0x00,0, 0x00,0, 0xF5,0, 0xFE,0, 0xD5,0, 0xFA,0, 0xF5,0 };
-static const u8 warn_hcft[16]  = { 0x00,0, 0x00,0, 0x00,0, 0x00,0, 0xA8,0, 0x40,0, 0xAA,0, 0x00,0 };
+static const u8 warn_hcnt[16]  = { 0x00,0x00, 0x00,0x00, 0x00,0x00, 0xF5,0xF5, 0xFE,0xFE, 0xD5,0xD5, 0xFA,0xFA, 0xF5,0xF5 };
+static const u8 warn_hcft[16]  = { 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0xA8,0xA8, 0x40,0x40, 0xAA,0xAA, 0x00,0x00 };
 #define WARN_VTOP   73     /* free BG3 slots past the minimap (65..72) / HUD tiles */
 #define WARN_HNEAR  74
 #define WARN_VNEAR  89     /* 89..95 free (flash letters end at 88, wipe starts at 96) */
@@ -762,7 +764,11 @@ static void render_load_tileset(void) {
 
 /* Load the current level's gameplay tileset (gem/boulder/block art + the two
  * sub-palettes) into VRAM_BG1_TILES / CGRAM 0-31. Caller must be force-blanked.
- * pal 1's reserved 0/1/2 = transparent/white/black keep the BG3 HUD intact. */
+ * pal 1's reserved 0/1/2 = transparent/white/black keep the BG3 HUD intact; idx3
+ * = red for the edge-warning dither (the markers' old icy-blue was relocated to the
+ * free idx13/CGRAM29, and marker tile pixels remapped 3->13, by a hand-patch of the
+ * committed res/bg_tiles_*.{pic,pal} -- NOT yet reflected in tools/build_gfx.py, so
+ * a future `make gfx` would revert it; redo the swap there if regenerating). */
 void render_load_gameplay_tiles(u8 level) {
     u8 *pic, *picend, *pal;
     switch (level) {
@@ -1106,7 +1112,9 @@ void render_init(void) {
      * during section slides. High priority so text sits above everything. */
     dmaCopyVram((u8 *)&hud_font2_pic, VRAM_BG3_TILES, (u16)(&hud_font2_picend - &hud_font2_pic));
     /* BG3 2bpp sub-palette 4 (CGRAM 16-19): index1 white, index2 black so the
-     * (now opaque) HUD font draws white text on a solid black bar. */
+     * (now opaque) HUD font draws white text on a solid black bar; index3 = red for
+     * the enemy edge-warning dither (during gameplay pal1's load below re-supplies
+     * the same 16-19, also with red at idx3). */
     setPalette((u8 *)&hud_font2_pal, BG3_TEXT_PAL * 4, 4 * 2);
     /* Custom life-icon glyph (BG3 tile 64): a white heart on the opaque-black bar
      * (= the original's life icon next to the lives count). 2bpp, row-interleaved
