@@ -206,13 +206,18 @@ static u16 compute_time_bonus(void) {
     return (u16)((bonus + 5) / 10 * 10);
 }
 
-static void load_level(u8 n) {
+static void load_level(u8 n, u8 close_wipe) {
     u8 sx, sy, sr, sc, i;
     u16 md;
 
-    setScreenOff();          /* blank the title/banner for the build -- the wipe is reserved
-                              * for entering gameplay (render_wipe_in below), not for the
-                              * non-gameplay screen we're leaving */
+    /* Leaving one gameplay level for the next: collapse the OLD level into a
+     * diamond point first (full SMAS close->open). Skipped when entering from a
+     * non-gameplay screen (title / continue), which just cuts to black. */
+    if (close_wipe) render_wipe_out();
+
+    setScreenOff();          /* blank the title/banner for the build -- the open wipe is
+                              * reserved for entering gameplay (render_wipe_in below), not
+                              * the non-gameplay screen we're leaving */
     render_load_font(0);     /* gameplay uses the OPAQUE font -> HUD reads as a solid bar */
     setScreenOff();          /* render_load_font un-blanked; stay blanked through the whole
                               * build so no half-built/garbled frame shows before render_wipe_in */
@@ -297,7 +302,7 @@ void game_init(void) {
     game.continues = MAX_CONTINUES;
     game.is_game_over = 0;
     game.is_victory = 0;
-    load_level(1);          /* builds the level map; render_init() is done once in main() */
+    load_level(1, 0);       /* builds the level map; render_init() is done once in main() */
 }
 
 /* Resume the current level with fresh lives (used by the continue option). */
@@ -307,7 +312,7 @@ void game_continue(void) {
     game.lives = START_LIVES;
     game.score = 0;             /* a continue wipes the score, like the original */
     game.is_game_over = 0;
-    load_level(game.current_level);
+    load_level(game.current_level, 0);   /* continue: come from the game-over screen, no close */
     game_map_dirty = 1;
 }
 
@@ -696,7 +701,7 @@ void game_update(void) {
         u8 ynow = (u8)((cur & PAD_Y) != 0);
         if (ynow && !dbg_yprev && !game.transitioning && !game.death_pending && p->alive) {
             dbg_yprev = ynow;
-            load_level((u8)(game.current_level >= MAX_LEVELS ? 1 : game.current_level + 1));
+            load_level((u8)(game.current_level >= MAX_LEVELS ? 1 : game.current_level + 1), 1);
             return;
         }
         dbg_yprev = ynow;
@@ -781,7 +786,7 @@ void game_update(void) {
         if (game.lc_timer == 0) {
             game.is_level_complete = 0;
             if (game.current_level >= MAX_LEVELS) game.is_victory = 1;
-            else load_level((u8)(game.current_level + 1));
+            else load_level((u8)(game.current_level + 1), 1);   /* close old level, open new */
         }
         return;                                  /* everything paused behind the banner */
     }

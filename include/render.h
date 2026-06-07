@@ -15,8 +15,11 @@
 #define BG2_PAL         2        /* BG2 uses sub-palettes 2..7 (96 colors, CGRAM 32..127) */
 #define HUD_TILE_BASE   64       /* BG1 tile index where the HUD font starts */
 #define HUD_PAL         1        /* BG sub-palette 1 (white), CGRAM 16..31    */
-#define VRAM_BG3_TILES  0x5000   /* HUD/text 2bpp font (BG3), tiles 0..63    */
-#define VRAM_BG3_MAP    0x5400   /* BG3 32x32 tilemap (HUD + scene text)     */
+#define VRAM_BG3_TILES  0x5000   /* HUD/text 2bpp font (BG3); tile region now 0x5000..0x5800
+                                  * (tiles 0..255) since the map moved up -- 128..191 hold
+                                  * the 64-level wipe gradient */
+#define VRAM_BG3_MAP    0x5C00   /* BG3 32x32 tilemap, relocated into the free 0x5C00..0x6000
+                                  * gap so the BG3 tile region above can grow to tile 255 */
 #define BG3_TEXT_PAL    4        /* 2bpp sub-palette 4 -> CGRAM 16..19 (white@17) */
 #define HUD_ICON_LIFE   64       /* BG3 tile 64: custom life (heart) glyph, past the font (0..63) */
 #define VRAM_OBJ_TILES  0x6000   /* OBJ base: player tiles 0..63         */

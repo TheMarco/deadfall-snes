@@ -224,6 +224,7 @@ static u8  bg3_dirty = 1;     /* bg3map changed -> upload it; else skip the 2KB 
                                * The HUD/text layer is static most frames, so this
                                * halves the per-frame VRAM DMA (4KB->2KB) and keeps
                                * the upload inside vblank (no tearing / no late frame). */
+static u8  bg3_only_flush = 0; /* wipe frames touch only BG3; skip the BG1 DMA budget */
 static u16 bg1map2[32 * 32];  /* BG1 screen 1: adjacent section, staged during a slide */
 /* Cached flat base pointers for the CURRENT section's grid + damage, so the hot
  * render_set_cell() avoids the world_section_index() variable-multiply and the
@@ -365,6 +366,14 @@ static void flush_map_impl(void) {
         slide_pending = 0;
         return;
     }
+    if (bg3_only_flush) {
+        if (bg3_dirty) {
+            dmaCopyVram((u8 *)bg3map, VRAM_BG3_MAP, 0x800);
+            bg3_dirty = 0;
+        }
+        bg3_only_flush = 0;
+        return;
+    }
     dmaCopyVram((u8 *)bg1map, VRAM_BG1_MAP, 0x800);   /* 1024 entries * 2 bytes */
     if (bg3_dirty) {                                  /* HUD/text rarely changes */
         dmaCopyVram((u8 *)bg3map, VRAM_BG3_MAP, 0x800);
@@ -501,97 +510,140 @@ void render_minimap_blink(void) {
     else       { *((vuint8 *)0x2122) = 0x00; *((vuint8 *)0x2122) = 0x00; }  /* off (black) */
 }
 
-/* ---- SMAS diamond tile-wipe scene transition --------------------------------
- * A per-tile "growing black triangle" dissolve that ripples out from the screen
- * centre in a diamond (the Super Mario All-Stars look). The overlay lives on BG3
- * (the front layer; its tiles carry the priority bit so they sit above BG1/BG2).
- * 8 coverage tiles (0 = clear .. 7 = full black) are built into BG3's free slots;
- * each cell picks a frame from its Manhattan distance to centre vs. a progress
- * counter. The heavy scene build runs at full black (force-blanked), so there is
- * no frozen frame. Blocking; pumps audio + waits a vblank per step. Because the
- * wipe borrows BG3 (shared with the HUD/text), the reveal saves and restores the
- * real BG3 map around itself. */
-#define WIPE_TILE    96      /* BG3 tile slots 96..111 (free: font 0..63, HUD 64..76) */
-#define WIPE_FRAMES  16      /* coverage gradations (one per 8x8 pixel-diagonal = smooth) */
-#define WIPE_CX      16      /* centre tile (256/8/2) */
-#define WIPE_CY      14      /* centre tile (224/8/2) */
-#define WIPE_MAXD    30      /* max Manhattan distance (corner 0,0 -> 16+14)          */
-#define WIPE_PMAX    (WIPE_MAXD + WIPE_FRAMES - 1)
-#define WIPE_STEP    5       /* progress per frame (speed; lower = slower)            */
+/* ---- SMAS triangle-iris scene transition -------------------------------------
+ * The actual Super Mario All-Stars wipe: the screen is tiled edge-to-edge with a
+ * small right-triangle "coverage" tile whose black half grows over DWIPE_FRAMES
+ * steps (a diagonal-hatch dither). Each cell's growth is phased by its EUCLIDEAN
+ * distance from the screen centre, so black is densest at the EDGES and the cleared
+ * area is a true ROUND iris in the MIDDLE -- it closes from the edges inward (and
+ * reverses to reveal). (Manhattan distance here gives a sharp DIAMOND, which is the
+ * tell that it isn't SMAS; tiles are square + the screen centre is the exact pixel
+ * centre, so Euclidean tile-distance maps straight to a circle on screen.) The wide
+ * gradient (a ~12-cell band of half-grown triangles) is what reads as smooth.
+ * Tile-based on BG3 (front layer, priority bit); the reveal saves and restores the
+ * real BG3 map (HUD/text). BG3-only flush keeps it inside vblank. */
+#define DWIPE_BASE   128     /* BG3 tile slots 128..191 (64 coverage tiles, freed by the map move) */
+#define DWIPE_FRAMES 64      /* 0 = empty .. 63 = full-black 8x8 triangle (64 growth sub-steps) */
+#define DWIPE_CX     16      /* iris centre, tile coords (32-wide BG3) */
+#define DWIPE_CY     14      /* iris centre (224px visible -> 28 rows) */
+#define DWIPE_MAXD   24      /* Euclidean tile-distance centre -> farthest grid corner (<=23.3,
+                              * rounded up so every painted 32x32 cell phases non-negative) */
+#define DWIPE_BAND   12      /* width (in tiles) of the active transition RING. Smaller = a
+                              * tighter, clearly-visible gradient band that sweeps in/out with
+                              * solid black behind and clear ahead (the SMAS look), instead of
+                              * one screen-wide soft fade where every tile looks the same. */
+#define DWIPE_PMAX   ((DWIPE_MAXD * DWIPE_FRAMES / DWIPE_BAND) + DWIPE_FRAMES - 1)
+#define DWIPE_STEP   16      /* progress per displayed frame (higher = faster). The 64-substep
+                              * per-tile dither keeps the edge smooth even at big steps. */
 
-static u8  wipe_ready = 0;
-static u8  wipe_dist[32][32];      /* Manhattan distance from centre, per BG3 cell    */
-static u16 bg3_save[32 * 32];      /* HUD/scene BG3 backup, restored after the reveal  */
+static u8  dwipe_ready = 0;
+static u8  dwipe_off[32][32];    /* per-tile coverage threshold (scaled Euclidean distance) */
+static u16 dwipe_base[32][32];   /* per-tile prebuilt map word: pal/prio + quadrant H/V flip +
+                                  * DWIPE_BASE, everything EXCEPT the growth frame. Precomputing it
+                                  * turns the per-frame paint into load/clamp/add/store (no branches,
+                                  * no multiply) so the whole 32x32 rebuild fits in one frame -> 60fps. */
+static u16 bg3_save[32 * 32];
 
-/* Build the 8 growing-triangle 2bpp tiles (colour 2 = black in the BG3 sub-palette)
- * and the per-cell distance table. Done once. */
-static void wipe_init(void) {
-    u8 td[WIPE_FRAMES * 16];        /* 8 tiles x 16 bytes (2bpp) */
-    u8 f, x, y, tx, ty;
-    for (f = 0; f < WIPE_FRAMES; f++) {
+/* Integer sqrt -- init-time only, tiny inputs (max 16^2+17^2 = 545), so the naive
+ * incremental loop is plenty. Used to phase the iris by true radial distance. */
+static u8 dwipe_isqrt(u16 v) {
+    u8 r = 0;
+    while ((u16)((u16)(r + 1) * (u16)(r + 1)) <= v) r++;
+    return r;
+}
+
+/* Build the 64 coverage tiles -- a black triangle that grows ONE PIXEL at a time in
+ * (x+y, then x) order, so each cell has 64 fine growth steps instead of 15 diagonals.
+ * That fine per-cell gradient is what lets the iris move fast and still look smooth
+ * (the thing SMAS does). Euclidean distance gives the round circular iris. */
+static void dwipe_init(void) {
+    static u8 td[DWIPE_FRAMES * 16];   /* 1KB -> static, off the small 65816 stack */
+    u8 f, s, x, tx, ty;
+    s16 i;
+    for (f = 0; f < DWIPE_FRAMES; f++) {
         u8 *t = &td[f * 16];
-        for (y = 0; y < 8; y++) {
-            u8 p1 = 0;             /* colour 2 = plane1 set, plane0 clear */
-            for (x = 0; x < 8; x++)
-                if (f > 0 && (u8)(x + y) <= (u8)(f - 1)) p1 |= (u8)(0x80 >> x);
-            t[y * 2] = 0; t[y * 2 + 1] = p1;
+        u8 count = (u8)(((u16)f * 64 + (DWIPE_FRAMES - 1) / 2) / (DWIPE_FRAMES - 1)); /* f:0..63 -> 0..64 px */
+        u8 placed = 0;
+        for (i = 0; i < 16; i++) t[i] = 0;
+        for (s = 0; s <= 14 && placed < count; s++)            /* anti-diagonal x+y = s */
+            for (x = 0; x < 8 && placed < count; x++) {
+                s8 yy = (s8)((s16)s - x);   /* base: black grows from the TOP-LEFT corner ("/"),
+                                             * quadrant H/V flips put it at each cell's outer corner */
+                if (yy >= 0 && yy < 8) { t[yy * 2 + 1] |= (u8)(0x80 >> x); placed++; }
+            }
+    }
+    dmaCopyVram(td, (u16)(VRAM_BG3_TILES + DWIPE_BASE * 8), DWIPE_FRAMES * 16);
+    for (ty = 0; ty < 32; ty++) {
+        /* Mirror the triangle per quadrant so the black corner always faces the screen
+         * EDGE -> the hatch radiates symmetrically about the centre, like SMAS, instead
+         * of every cell leaning the same way. H-flip ($4000) on the right half, V-flip
+         * ($8000) on the bottom half (free tilemap flip bits), folded in here once. */
+        u16 vf = (u16)((ty >= DWIPE_CY) ? 0x8000 : 0);
+        for (tx = 0; tx < 32; tx++) {
+            u16 hf = (u16)((tx >= DWIPE_CX) ? 0x4000 : 0);
+            u8 adx = (u8)(tx > DWIPE_CX ? tx - DWIPE_CX : DWIPE_CX - tx);
+            u8 ady = (u8)(ty > DWIPE_CY ? ty - DWIPE_CY : DWIPE_CY - ty);
+            u8 dist = dwipe_isqrt((u16)((u16)adx * adx + (u16)ady * ady)); /* Euclidean -> round iris */
+            /* coverage threshold, scaled so the 0..FRAMES ramp spans only DWIPE_BAND
+             * tiles -> a defined gradient ring rather than a screen-wide soft fade */
+            dwipe_off[ty][tx]  = (u8)((u16)(DWIPE_MAXD - dist) * DWIPE_FRAMES / DWIPE_BAND);
+            dwipe_base[ty][tx] = (u16)(((BG3_TEXT_PAL << 10) | 0x2000 | DWIPE_BASE) | vf | hf);
         }
     }
-    dmaCopyVram(td, (u16)(VRAM_BG3_TILES + WIPE_TILE * 8), WIPE_FRAMES * 16);
-    for (ty = 0; ty < 32; ty++)
-        for (tx = 0; tx < 32; tx++) {
-            u8 dx = (u8)(tx > WIPE_CX ? tx - WIPE_CX : WIPE_CX - tx);
-            u8 dy = (u8)(ty > WIPE_CY ? ty - WIPE_CY : WIPE_CY - ty);
-            wipe_dist[ty][tx] = (u8)(dx + dy);
-        }
-    wipe_ready = 1;
+    dwipe_ready = 1;
 }
 
-/* Paint bg3map for progress p (0 = clear .. WIPE_PMAX = all black). Edges (far from
- * centre) fill first, so it closes / opens as a diamond. */
-static void wipe_paint(u8 p) {
-    u16 pb = (u16)((BG3_TEXT_PAL << 10) | 0x2000);
-    u8 tx, ty;
-    for (ty = 0; ty < 32; ty++)
-        for (tx = 0; tx < 32; tx++) {
-            s16 fr = (s16)((s16)p - (s16)(WIPE_MAXD - wipe_dist[ty][tx]));
-            if (fr < 0) fr = 0; else if (fr > WIPE_FRAMES - 1) fr = WIPE_FRAMES - 1;
-            bg3map[ty * 32 + tx] = (u16)(pb + WIPE_TILE + (u8)fr);
-        }
-    bg3_dirty = 1; game_map_dirty = 1;     /* bg3map DMA'd next vblank */
+/* Paint the iris at progress `prog`. A cell's coverage = prog - (MAXD - distance):
+ * far-from-centre (big distance) fills FIRST, the centre LAST -> black closes inward
+ * from the edges; the clamp leaves a soft DWIPE_FRAMES-wide band of growing triangles.
+ * Hot path: with the map word prebuilt in dwipe_base, each cell is just load/clamp/
+ * add/store over a flat 1024 array -> the whole rebuild lands inside one frame. */
+static void dwipe_paint(u8 prog) {
+    const u8  *off  = (const u8  *)dwipe_off;
+    const u16 *base = (const u16 *)dwipe_base;
+    u16 i;
+    for (i = 0; i < 32 * 32; i++) {
+        s16 fr = (s16)((s16)prog - (s16)off[i]);
+        if (fr < 0) fr = 0; else if (fr > DWIPE_FRAMES - 1) fr = DWIPE_FRAMES - 1;
+        bg3map[i] = (u16)(base[i] + (u8)fr);
+    }
+    bg3_dirty = 1; bg3_only_flush = 1; game_map_dirty = 1;
 }
 
-static void wipe_anim(u8 from, u8 to) {
+static void dwipe_anim(u8 from, u8 to) {
     s16 p = from;
-    s8 dir = (to > from) ? WIPE_STEP : -WIPE_STEP;
-    if (!wipe_ready) wipe_init();
+    s8 dir = (to > from) ? DWIPE_STEP : -DWIPE_STEP;
+    if (!dwipe_ready) dwipe_init();
     for (;;) {
-        wipe_paint((u8)p);
-        audio_process();
-        WaitForVBlank();
-        if (dir > 0) { if (p >= to) break; p = (s16)(p + dir); if (p > to) p = to; }
-        else         { if (p <= to) break; p = (s16)(p + dir); if (p < to) p = to; }
+        dwipe_paint((u8)p);
+        audio_process(); WaitForVBlank(); render_apply_scroll();
+        if (dir > 0) { if (p >= (s16)to) break; p = (s16)(p + dir); if (p > (s16)to) p = (s16)to; }
+        else         { if (p <= (s16)to) break; p = (s16)(p + dir); if (p < (s16)to) p = (s16)to; }
     }
 }
 
-/* Ripple the current scene to full black, then force-blank for the heavy load. */
+/* Close the iris from the edges inward to solid black, then force-blank for the load. */
 void render_wipe_out(void) {
-    wipe_anim(0, WIPE_PMAX);
+    render_hide_sprites();
+    setScreenOn();                       /* ensure visible (some callers leave it blanked) */
+    dwipe_anim(0, DWIPE_PMAX);
     setScreenOff();
 }
 
-/* Save the freshly-built BG3 (HUD/text), start from full black, un-blank, ripple
- * the new scene in, then put the real BG3 back (the wipe overwrote it). */
+/* Open the freshly-loaded scene: start solid black, un-blank, then iris outward from
+ * the centre, and restore the real BG3 (HUD/text) the wipe overwrote. */
 void render_wipe_in(void) {
     u16 i;
     for (i = 0; i < 32 * 32; i++) bg3_save[i] = bg3map[i];
-    wipe_paint(WIPE_PMAX);                       /* bg3map = all black */
-    audio_process(); WaitForVBlank();            /* DMA the cover while still blanked */
-    setScreenOn();
-    wipe_anim(WIPE_PMAX, 0);                      /* ripple open */
-    for (i = 0; i < 32 * 32; i++) bg3map[i] = bg3_save[i];   /* restore HUD/text */
-    bg3_dirty = 1; game_map_dirty = 1;
+    if (!dwipe_ready) dwipe_init();
+    dwipe_paint(DWIPE_PMAX);
     audio_process(); WaitForVBlank();
+    setScreenOn();
+    dwipe_anim(DWIPE_PMAX, 0);
+    for (i = 0; i < 32 * 32; i++) bg3map[i] = bg3_save[i];
+    bg3_dirty = 1; bg3_only_flush = 1; game_map_dirty = 1;
+    audio_process(); WaitForVBlank();
+    render_apply_scroll();
 }
 
 /* Draw the player at its new-section entry position relative to the camera. */
@@ -1081,7 +1133,7 @@ void render_init(void) {
                     (u16)(VRAM_BG3_TILES + (FLASH_TILE_BASE + j) * 8), 16); }
     bgSetGfxPtr(2, VRAM_BG3_TILES);
     bgSetMapPtr(2, VRAM_BG3_MAP, SC_32x32);
-    wipe_init();   /* upload the diamond-wipe tiles now (boot, screen blanked = safe DMA) */
+    dwipe_init();   /* upload the diamond-grid coverage tiles now (boot, screen blanked) */
     /* Nudge the whole BG3 layer (HUD bar + all scene text) up 2px: the font
      * glyphs are top-aligned in their tile, so on tile-row 1 the text sat at
      * y8-14 with a dead black row at y15. Scrolling up 2px lifts the text and
