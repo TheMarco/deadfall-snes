@@ -181,6 +181,9 @@ typedef struct {
 
     /* death / portal / spawn animation */
     u8 death_pending, death_frame, death_timer;
+    u8 death_by_fall;           /* the kill was a falling tile: freeze it above the player
+                                 * during the death anim, then drop it the last 16px         */
+    u8 death_dropping;          /* post-anim phase: the held tile is dropping onto the spot   */
     u8 portal_frame, portal_timer;
     u8 spawn_glow_index, spawn_glow_timer;
 

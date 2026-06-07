@@ -30,6 +30,7 @@ extern char spr_zap_h_pic, spr_zap_h_picend, spr_zap_h_pal;
 extern char spr_zap_v_pic, spr_zap_v_picend, spr_zap_v_pal;
 extern char spr_pdeath_pic, spr_pdeath_picend, spr_pdeath_pal;
 extern char spr_edeath_pic, spr_edeath_picend, spr_edeath_pal;
+extern char spr_block_pic, spr_block_picend, spr_block_pal;   /* attract 'rock' (mineable block) */
 extern char spr_falls_1_pic, spr_falls_1_picend, spr_falls_1_pal;   /* per-level falling gem/boulder/1-up */
 extern char spr_falls_2_pic, spr_falls_2_picend, spr_falls_2_pal;
 extern char spr_falls_3_pic, spr_falls_3_picend, spr_falls_3_pal;
@@ -116,10 +117,46 @@ static const u8 hud_colon_tile[16] = {
  * playfield edge; red is palette-blocked here so this is a white 3px strip). Two
  * 2bpp tiles: a TOP strip (white rows 0-2) used for up/down (V-flip = down) and a
  * LEFT strip (white cols 0-2) for left/right (H-flip = right). */
-static const u8 edge_top_tile[16]  = { 0xFF,0,0xFF,0,0xFF,0, 0,0, 0,0, 0,0, 0,0, 0,0 };
-static const u8 edge_left_tile[16] = { 0xE0,0,0xE0,0,0xE0,0,0xE0,0,0xE0,0,0xE0,0,0xE0,0,0xE0,0 };
-#define EDGE_TILE_TOP   73     /* past the 8-tile (4x2) minimap at 65..72 */
-#define EDGE_TILE_LEFT  74
+/* Enemy edge-warning bars: a WHITE dither gradient that fades from the playfield
+ * edge inward (2 tiles / 16px deep). White is the BG3 text palette's index1 (CGRAM
+ * 17), so this needs no extra colours -- just ordered-dither tiles (plane0 = white
+ * pixels, plane1 = 0). VNEAR/VFAR = vertical fade (top edge; V-flip for bottom);
+ * HNEAR/HFAR = horizontal fade (left edge; H-flip for right). NEAR = dense at the
+ * edge -> ~50%; FAR = ~50% -> transparent. */
+/* Vertical fade = a CONTINUOUS dithered gradient over 3 tiles, dense at the edge
+ * (NOT solid -- a solid head reads as a flat bar). VTOP is the top-edge tile: its
+ * top 3 rows are black to carry the HUD bar's lower edge, then the dense dither
+ * head. VBOT is the same dense head WITHOUT the HUD black (bottom edge). VNEAR
+ * continues the fade, VFAR finishes it to transparent. (Horizontal H* tiles for
+ * the left/right bars are unchanged.) */
+static const u8 warn_vtop[16]  = { 0x00,0xFF, 0x00,0xFF, 0x00,0xFF, 0xB6,0, 0x6D,0, 0xAA,0, 0x55,0, 0xAA,0 };
+static const u8 warn_vbot[16]  = { 0xB6,0, 0x6D,0, 0xAA,0, 0x55,0, 0xAA,0, 0x92,0, 0x49,0, 0x24,0 };
+static const u8 warn_vnear[16] = { 0x55,0, 0xA4,0, 0x49,0, 0x92,0, 0x22,0, 0x44,0, 0x80,0, 0x08,0 };
+static const u8 warn_vfar[16]  = { 0x40,0, 0x04,0, 0x20,0, 0x00,0, 0x00,0, 0x00,0, 0x00,0, 0x00,0 };
+static const u8 warn_hnear[16] = { 0xFE,0, 0xD5,0, 0xFA,0, 0xF5,0, 0xFE,0, 0xD5,0, 0xFA,0, 0xF5,0 };
+static const u8 warn_hfar[16]  = { 0xA8,0, 0x40,0, 0xAA,0, 0x00,0, 0xA8,0, 0x40,0, 0xAA,0, 0x00,0 };
+/* Side-bar TOP caps: the side (horizontal) bars run up into the HUD halfbar row,
+ * where the top 3 rows (screen y14-16) are the HUD bar's black lower edge. These
+ * carry that black in rows 0-2 and the horizontal-gradient white only from row 3
+ * (y17) down, so the side bars reach the playfield top WITHOUT painting over the
+ * HUD. (HCN = the dense col-0/31 edge; HCF = the fading col-1/30.) */
+static const u8 warn_hcn[16]   = { 0x00,0xFF, 0x00,0xFF, 0x00,0xFF, 0xF5,0, 0xFE,0, 0xD5,0, 0xFA,0, 0xF5,0 };
+static const u8 warn_hcf[16]   = { 0x00,0xFF, 0x00,0xFF, 0x00,0xFF, 0x00,0, 0xA8,0, 0x40,0, 0xAA,0, 0x00,0 };
+/* RIGHT-side top caps: same as HCN/HCF but TRANSPARENT (not black) in rows 0-2,
+ * because cols 30-31 hold the minimap OBJ -- a black BG3 tile there (high prio)
+ * would clip the minimap's bottom pixels. Transparent lets the minimap show. */
+static const u8 warn_hcnt[16]  = { 0x00,0, 0x00,0, 0x00,0, 0xF5,0, 0xFE,0, 0xD5,0, 0xFA,0, 0xF5,0 };
+static const u8 warn_hcft[16]  = { 0x00,0, 0x00,0, 0x00,0, 0x00,0, 0xA8,0, 0x40,0, 0xAA,0, 0x00,0 };
+#define WARN_VTOP   73     /* free BG3 slots past the minimap (65..72) / HUD tiles */
+#define WARN_HNEAR  74
+#define WARN_VNEAR  89     /* 89..95 free (flash letters end at 88, wipe starts at 96) */
+#define WARN_VFAR   90
+#define WARN_VBOT   91
+#define WARN_HFAR   92
+#define WARN_HCN    93
+#define WARN_HCF    94
+#define WARN_HCNT   95
+#define WARN_HCFT   112    /* past the wipe tiles (96..111) */
 
 /* HUD bar's lower edge. The BG3 text layer is nudged up 2px (HUD_BG3_VOFS), which
  * lifts the bar's black off the bottom 2px and would otherwise reveal the BG2
@@ -707,6 +744,13 @@ void render_load_gameplay_tiles(u8 level) {
     }
     dmaCopyVram(pic, VRAM_OBJ_FALLS, (u16)(picend - pic));
     setPalette(pal, 128 + OBJPAL_FALLS * 16, 16 * 2);
+
+    /* The Mode-3 title's tilemap (VRAM 0x7000) overwrites the upper half of the zap
+     * OBJ tiles (zap_h 0x7000.., zap_v 0x7200..), so after returning from the title
+     * (or attract) the robot's beam was garbled past its first segment. Reload them
+     * on every level load -- they're title-only collateral, cheap to restore. */
+    dmaCopyVram((u8 *)&spr_zap_h_pic, VRAM_OBJ_ZAPH, (u16)(&spr_zap_h_picend - &spr_zap_h_pic));
+    dmaCopyVram((u8 *)&spr_zap_v_pic, VRAM_OBJ_ZAPV, (u16)(&spr_zap_v_picend - &spr_zap_v_pic));
 }
 
 /* Fill the WHOLE BG2 map with the seamless texture tiled. Must cover all 32
@@ -927,23 +971,10 @@ void render_show_title(void) {
     setScreenOn();
 }
 
-void render_init(void) {
-    consoleInit();          /* sets up NMI/vblank, auto-joypad read, etc. */
-    setBrightness(0);
-    WaitForVBlank();
-
-    oamInit();
-    /* Gameplay tiles are per-level (gem/boulder/block differ). bgInitTileSet
-     * establishes the BG1 gfx ptr + 16-color mode with level 1's tiles for the
-     * title; render_load_gameplay_tiles() swaps tiles+palettes on each level
-     * load. Two BG sub-palettes: pal 0 (block/boulder/gem) at CGRAM 0-15, pal 1
-     * (portal/spawn/extra-life/robot-spawn) at CGRAM 16-31. The BG3 HUD shares
-     * CGRAM 16-18 (transparent/white/black); pal 1 reserves those exact slots,
-     * and the HUD palette is re-asserted below, so they coexist. */
-    bgInitTileSet(0, (u8 *)&bg_tiles_1_pic, (u8 *)&bg_tiles_1_pal, 0,
-                  (u16)(&bg_tiles_1_picend - &bg_tiles_1_pic), 16 * 2,
-                  BG_16COLORS, VRAM_BG1_TILES);
-    setPalette((u8 *)(&bg_tiles_1_pal) + 32, 16, 16 * 2);   /* pal1 -> CGRAM 16-31 */
+/* (Re)load every entity OBJ tileset + palette into VRAM (0x6000+). Called once at
+ * boot by render_init, and again by render_attract_begin because the Mode-3 title
+ * screen overwrites part of the OBJ tile region. */
+void render_load_sprites(void) {
     oamInitGfxSet((u8 *)&spr_player_pic, (u16)(&spr_player_picend - &spr_player_pic),
                   (u8 *)&spr_player_pal, 16 * 2, OBJPAL_PLAYER, VRAM_OBJ_TILES, OBJ_SIZE16_L32);
     /* enemy tiles share the same OBJ base, loaded just after the player tiles */
@@ -965,7 +996,52 @@ void render_init(void) {
     dmaCopyVram((u8 *)&spr_edeath_pic, VRAM_OBJ_EDEATH, (u16)(&spr_edeath_picend - &spr_edeath_pic));
     setPalette((u8 *)&spr_edeath_pal, 128 + OBJPAL_EDEATH * 16, 16 * 2);
     dmaCopyVram((u8 *)&spr_falls_1_pic, VRAM_OBJ_FALLS, (u16)(&spr_falls_1_picend - &spr_falls_1_pic));
-    setPalette((u8 *)&spr_falls_1_pal, 128 + OBJPAL_FALLS * 16, 16 * 2);  /* swapped per level below */
+    setPalette((u8 *)&spr_falls_1_pal, 128 + OBJPAL_FALLS * 16, 16 * 2);  /* swapped per level in-game */
+}
+
+/* Set up the attract-mode canvas: a black screen showing only BG3 (character name
+ * text) and OBJ (the character sprites). The Mode-3 title overwrote VRAM 0x0000..
+ * 0x6000 -- which includes the BG3 font (0x5000) and part of the OBJ tiles -- so
+ * both are reloaded here before the cinematic draws anything. */
+void render_attract_begin(void) {
+    u8 s;
+    setScreenOff();
+    render_load_sprites();              /* re-DMA entity OBJ tiles (title clobbered the zap region) */
+    /* The Mode-3 title's 8bpp palette overwrote CGRAM and its tiles overwrote the
+     * BG3 font (VRAM 0x5000). Restore both: load the OPAQUE font -- its space tile
+     * (which render_clear_screen fills bg3map with) is SOLID BLACK, so the canvas
+     * reads as true black -- and reload the BG3 text sub-palette (white@17/black@18). */
+    dmaCopyVram((u8 *)&hud_font2_pic, VRAM_BG3_TILES, (u16)(&hud_font2_picend - &hud_font2_pic));
+    setPalette((u8 *)&hud_font2_pal, BG3_TEXT_PAL * 4, 4 * 2);
+    /* The attract 'rock' (mineable block) reuses the idle player-death OBJ slot +
+     * palette -- nothing dies on the title, so it's free for the duration. */
+    dmaCopyVram((u8 *)&spr_block_pic, VRAM_OBJ_PDEATH, (u16)(&spr_block_picend - &spr_block_pic));
+    setPalette((u8 *)&spr_block_pal, 128 + OBJPAL_BLOCK_ATTRACT * 16, 16 * 2);
+    render_clear_screen();              /* Mode 1; bg3map -> all black (in RAM); BG pointers restored */
+    for (s = 0; s < 64; s++) oamSetVisible((u16)(s * 4), OBJ_HIDE);  /* clean OAM slate */
+    videoMode = 0x14; REG_TM = 0x14;    /* show only BG3 (names) + OBJ (characters): black canvas */
+    render_flush_map();                 /* push the black bg3map now, while the screen is blanked */
+    setScreenOn();
+}
+
+void render_init(void) {
+    consoleInit();          /* sets up NMI/vblank, auto-joypad read, etc. */
+    setBrightness(0);
+    WaitForVBlank();
+
+    oamInit();
+    /* Gameplay tiles are per-level (gem/boulder/block differ). bgInitTileSet
+     * establishes the BG1 gfx ptr + 16-color mode with level 1's tiles for the
+     * title; render_load_gameplay_tiles() swaps tiles+palettes on each level
+     * load. Two BG sub-palettes: pal 0 (block/boulder/gem) at CGRAM 0-15, pal 1
+     * (portal/spawn/extra-life/robot-spawn) at CGRAM 16-31. The BG3 HUD shares
+     * CGRAM 16-18 (transparent/white/black); pal 1 reserves those exact slots,
+     * and the HUD palette is re-asserted below, so they coexist. */
+    bgInitTileSet(0, (u8 *)&bg_tiles_1_pic, (u8 *)&bg_tiles_1_pal, 0,
+                  (u16)(&bg_tiles_1_picend - &bg_tiles_1_pic), 16 * 2,
+                  BG_16COLORS, VRAM_BG1_TILES);
+    setPalette((u8 *)(&bg_tiles_1_pal) + 32, 16, 16 * 2);   /* pal1 -> CGRAM 16-31 */
+    render_load_sprites();   /* entity OBJ tiles + palettes (also reused by attract mode) */
     bgSetMapPtr(0, VRAM_BG1_MAP, SC_32x32);
 
     /* BG2 = per-level shared background (behind the playfield). Load level 1's
@@ -985,8 +1061,16 @@ void render_init(void) {
      * (even byte=plane0, odd=plane1); plane1=~plane0 makes the background index2
      * (black) like the rest of the opaque font. */
     dmaCopyVram((u8 *)hud_life_tile, (u16)(VRAM_BG3_TILES + HUD_ICON_LIFE * 8), 16);
-    dmaCopyVram((u8 *)edge_top_tile,  (u16)(VRAM_BG3_TILES + EDGE_TILE_TOP * 8), 16);
-    dmaCopyVram((u8 *)edge_left_tile, (u16)(VRAM_BG3_TILES + EDGE_TILE_LEFT * 8), 16);
+    dmaCopyVram((u8 *)warn_vtop,  (u16)(VRAM_BG3_TILES + WARN_VTOP  * 8), 16);
+    dmaCopyVram((u8 *)warn_vbot,  (u16)(VRAM_BG3_TILES + WARN_VBOT  * 8), 16);
+    dmaCopyVram((u8 *)warn_vnear, (u16)(VRAM_BG3_TILES + WARN_VNEAR * 8), 16);
+    dmaCopyVram((u8 *)warn_vfar,  (u16)(VRAM_BG3_TILES + WARN_VFAR  * 8), 16);
+    dmaCopyVram((u8 *)warn_hnear, (u16)(VRAM_BG3_TILES + WARN_HNEAR * 8), 16);
+    dmaCopyVram((u8 *)warn_hfar,  (u16)(VRAM_BG3_TILES + WARN_HFAR  * 8), 16);
+    dmaCopyVram((u8 *)warn_hcn,   (u16)(VRAM_BG3_TILES + WARN_HCN   * 8), 16);
+    dmaCopyVram((u8 *)warn_hcf,   (u16)(VRAM_BG3_TILES + WARN_HCF   * 8), 16);
+    dmaCopyVram((u8 *)warn_hcnt,  (u16)(VRAM_BG3_TILES + WARN_HCNT  * 8), 16);
+    dmaCopyVram((u8 *)warn_hcft,  (u16)(VRAM_BG3_TILES + WARN_HCFT  * 8), 16);
     dmaCopyVram((u8 *)hud_colon_tile, (u16)(VRAM_BG3_TILES + HUD_COLON_TILE * 8), 16);
     dmaCopyVram((u8 *)hud_halfbar_tile, (u16)(VRAM_BG3_TILES + HUD_HALFBAR_TILE * 8), 16);  /* bar lower edge */
     /* Transparent-bg copies of the banner letters at FLASH_TILE_BASE.. so the
@@ -1514,18 +1598,62 @@ void render_flash_clear(void) {
  * Only touches VRAM when the mask changes. */
 void render_edge_warn(u8 mask) {
     u8 i;
-    u8 top = (u8)(PLAYFIELD_OFFSET_Y >> 3);          /* first playfield tile row */
-    u8 bot = (u8)(top + GRID_ROWS * 2 - 1);          /* last playfield tile row  */
+    /* BG3 is nudged up 2px, so the playfield top (y16) falls in the HUD halfbar row
+     * and the bottom (y223) in the row just past the last full playfield row. To
+     * reach both edges the vertical bars are 3 tiles deep with an edge "cap":
+     *   top    -> cap on row rc (the halfbar row: black HUD edge + white) then near,far
+     *   bottom -> near(solid head),  near(V-flip), far(V-flip) down to row rb+1
+     * rc stays the halfbar when no top warning is up (HUD bottom 2px preserved). */
+    u8 rc = (u8)(PLAYFIELD_OFFSET_Y >> 3);                   /* HUD halfbar / top-cap row (2) */
+    u8 r0 = (u8)(rc + 1);                                    /* first interior playfield row  */
+    u8 rb = (u8)(rc + GRID_ROWS * 2 - 1);                    /* last full playfield row (27)  */
+    u8 rd = (u8)(rb + 1);                                    /* bottom-cap row (28) -> reaches y223 */
     u16 P  = (u16)((BG3_TEXT_PAL << 10) | 0x2000);
+    u16 half = (u16)(HUD_HALFBAR_TILE | P);
     if (mask == edge_last_mask) return;
     edge_last_mask = mask;
+
+    /* clear: the 6 horizontal band rows (all cols; row rc keeps the HUD halfbar),
+     * then the side columns for the rows between the bands. The vertical bars are
+     * 3 tiles deep with an edge "cap" (top cap carries the HUD bar's black edge;
+     * bottom cap is the solid head). The side bars span the FULL height rc..rd with
+     * the same caps at their ends, so all four bars reach the screen edges. */
     for (i = 0; i < 32; i++) {
-        bg3map[top * 32 + i] = (mask & 1) ? (u16)(EDGE_TILE_TOP | P) : 0;
-        bg3map[bot * 32 + i] = (mask & 2) ? (u16)(EDGE_TILE_TOP | P | 0x8000) : 0;  /* V-flip */
+        bg3map[rc * 32 + i]       = (i < MM_COL) ? half : 0;
+        bg3map[r0 * 32 + i]       = 0;
+        bg3map[(rc + 2) * 32 + i] = 0;
+        bg3map[(rb - 1) * 32 + i] = 0;
+        bg3map[rb * 32 + i]       = 0;
+        bg3map[rd * 32 + i]       = 0;
     }
-    for (i = top; i <= bot; i++) {
-        bg3map[i * 32 + 0]  = (mask & 4) ? (u16)(EDGE_TILE_LEFT | P) : 0;
-        bg3map[i * 32 + 31] = (mask & 8) ? (u16)(EDGE_TILE_LEFT | P | 0x4000) : 0;  /* H-flip */
+    for (i = (u8)(rc + 3); i <= (u8)(rb - 2); i++) {
+        bg3map[i * 32 + 0]  = 0; bg3map[i * 32 + 1]  = 0;
+        bg3map[i * 32 + 30] = 0; bg3map[i * 32 + 31] = 0;
+    }
+
+    if (mask & 1) for (i = 0; i < 32; i++) {                 /* top: cap at the edge, fading down */
+        bg3map[rc * 32 + i]       = (u16)(WARN_VTOP | P);
+        bg3map[r0 * 32 + i]       = (u16)(WARN_VNEAR | P);
+        bg3map[(rc + 2) * 32 + i] = (u16)(WARN_VFAR | P);
+    }
+    if (mask & 2) for (i = 0; i < 32; i++) {                 /* bottom: cap at the edge, fading up */
+        bg3map[rd * 32 + i]       = (u16)(WARN_VBOT | P);             /* dense head reaches y223 */
+        bg3map[rb * 32 + i]       = (u16)(WARN_VNEAR | P | 0x8000);   /* V-flip */
+        bg3map[(rb - 1) * 32 + i] = (u16)(WARN_VFAR | P | 0x8000);
+    }
+    if (mask & 4) {                                          /* left: HUD-safe cap at rc, gradient rc+1..rd */
+        bg3map[rc * 32 + 0] = (u16)(WARN_HCN | P);  bg3map[rc * 32 + 1] = (u16)(WARN_HCF | P);
+        for (i = r0; i <= rd; i++) {
+            bg3map[i * 32 + 0] = (u16)(WARN_HNEAR | P);
+            bg3map[i * 32 + 1] = (u16)(WARN_HFAR | P);
+        }
+    }
+    if (mask & 8) {                                          /* right (H-flip): minimap-safe cap at rc */
+        bg3map[rc * 32 + 31] = (u16)(WARN_HCNT | P | 0x4000);  bg3map[rc * 32 + 30] = (u16)(WARN_HCFT | P | 0x4000);
+        for (i = r0; i <= rd; i++) {
+            bg3map[i * 32 + 31] = (u16)(WARN_HNEAR | P | 0x4000);
+            bg3map[i * 32 + 30] = (u16)(WARN_HFAR | P | 0x4000);
+        }
     }
     bg3_dirty = 1;
     game_map_dirty = 1;

@@ -10,10 +10,11 @@
 #include "game.h"
 #include "render.h"
 #include "audio.h"
+#include "attract.h"
 
 GameState game;
 
-enum { SC_LOGO, SC_TITLE, SC_PLAY, SC_GAMEOVER, SC_VICTORY };
+enum { SC_LOGO, SC_TITLE, SC_PLAY, SC_GAMEOVER, SC_VICTORY, SC_ATTRACT };
 
 /* Boot LogoScene physics (port of LogoScene.js): the studio logo drops in under
  * gravity, bounces twice (crush SFX each impact), settles, holds ~3s, fades to the
@@ -25,13 +26,15 @@ enum { SC_LOGO, SC_TITLE, SC_PLAY, SC_GAMEOVER, SC_VICTORY };
 #define LOGO_MAXBOUNCE  2
 #define LOGO_HOLD       84     /* ~1.4s settled before fading */
 #define LOGO_FADE       18     /* fade-to-title frames */
+#define ATTRACT_IDLE_FRAMES 900 /* ~15s of no input on the title -> attract mode (matches JS) */
 
-static void scene_title(void) {
+static void scene_title(u8 reload_music) {
     render_hide_sprites();
     render_clear_screen();                  /* clear leftover logo sprites/BG3 (Mode 3 set below) */
     render_show_title();                    /* Mode-3 8bpp title image; un-blanks showing the title */
-    audio_music_intro();                    /* title theme -- AFTER show_title so the ~1s SPC load
-                                             * freezes on the title, not on the leftover logo */
+    if (reload_music)                       /* attract returns here with the title theme STILL
+                                             * playing -> skip the reload so the loop is seamless */
+        audio_music_intro();                /* AFTER show_title so the ~1s SPC load freezes on the title */
     game_map_dirty = 1;
 }
 
@@ -87,6 +90,7 @@ int main(void) {
     u16 pad_prev = 0;    /* for manual edge detection (see below) */
     u8  cr_stage = 0;    /* credits sequence stage */
     u16 cr_timer = 0;    /* frames until the next credits stage */
+    u16 idle = 0;        /* frames of no input on the title -> attract mode */
     s16 logo_y = (s16)(LOGO_START << 8);  /* LogoScene state (8.8 fixed) */
     s16 logo_v = 0;
     u8  logo_state = 0;  /* 0=falling, 1=settled/hold, 2=fading */
@@ -138,7 +142,7 @@ int main(void) {
                 } else {                               /* fading out -> title */
                     render_logo_sparkles(0);           /* keep the live sparkles twinkling, no new ones */
                     if (logo_timer) { logo_timer--; setBrightness((u8)(15 * logo_timer / LOGO_FADE)); }
-                    if (logo_timer == 0) { scene = SC_TITLE; scene_title(); }
+                    if (logo_timer == 0) { scene = SC_TITLE; scene_title(1); }
                 }
                 if ((down & PAD_START) && logo_state < 2) {   /* START skips to the fade */
                     logo_state = 2; logo_timer = LOGO_FADE;
@@ -151,6 +155,13 @@ int main(void) {
                     audio_music_fadeout(45);   /* fade the title theme out before the level loads */
                     game_init();
                     scene = SC_PLAY;
+                    idle = 0;
+                } else if (cur) {
+                    idle = 0;                  /* any input resets the attract countdown */
+                } else if (++idle >= ATTRACT_IDLE_FRAMES) {
+                    idle = 0;
+                    attract_begin();           /* 15s idle -> show off the cast */
+                    scene = SC_ATTRACT;
                 }
                 break;
 
@@ -165,7 +176,7 @@ int main(void) {
             case SC_GAMEOVER:
                 if (down & PAD_START) {
                     if (game.continues > 0) { game_continue(); scene = SC_PLAY; }
-                    else                    { scene = SC_TITLE; scene_title(); }
+                    else                    { scene = SC_TITLE; scene_title(1); }
                 }
                 break;
 
@@ -178,7 +189,18 @@ int main(void) {
                         scene_credits(cr_stage);
                     }
                 } else if (down & PAD_START) {          /* final stage -> back to title */
-                    audio_stop(); scene = SC_TITLE; scene_title();
+                    audio_stop(); scene = SC_TITLE; scene_title(1);
+                }
+                break;
+
+            case SC_ATTRACT:
+                /* idle character showcase; any press (or its natural end) -> title.
+                 * Blank first: scene_title's render_clear_screen briefly runs Mode 1
+                 * with BG1 still pointing at the title's leftover 8bpp tiles, which
+                 * would flash as garbage if shown. */
+                if (attract_update(down)) {
+                    setScreenOff();
+                    scene = SC_TITLE; scene_title(0); idle = 0;   /* 0: title theme never stopped */
                 }
                 break;
         }

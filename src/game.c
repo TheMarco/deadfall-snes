@@ -246,6 +246,8 @@ static void load_level(u8 n) {
     game.push_pending = 0;
     game.crush_safety_timer = 0;
     game.death_pending = 0;
+    game.death_by_fall = 0;
+    game.death_dropping = 0;
     game.transitioning = 0;      /* clear stale section-transition state -- WRAM isn't zeroed
                                   * at boot, so a garbage value here ran the brightness-fade on
                                   * the first level (the pre-existing "game start" flash) */
@@ -699,6 +701,19 @@ void game_update(void) {
         }
         dbg_yprev = ynow;
     }
+    /* DEBUG (pre-release): tap SELECT -> jump straight to the victory/credits
+     * sequence so the ending is one keypress away (main.c's SC_PLAY reads
+     * is_victory). Edge-detected; blocked during transitions/death. */
+    {
+        static u8 dbg_selprev = 0;
+        u8 snow = (u8)((cur & PAD_SELECT) != 0);
+        if (snow && !dbg_selprev && !game.transitioning && !game.death_pending && p->alive) {
+            dbg_selprev = snow;
+            game.is_victory = 1;
+            return;
+        }
+        dbg_selprev = snow;
+    }
 #endif
 
     /* section transition: fade screen out, switch section at black, fade in.
@@ -778,10 +793,15 @@ void game_update(void) {
     /* smooth gravity: slide each in-flight tile down; draw it on BG1 when it lands */
     if (game.gravity_resolving) {
         u8 any = 0;
+        /* Hold the falling tiles perfectly still while the death animation plays
+         * (death_pending) -- they resume for the final drop once death_dropping is
+         * set. So a boulder/gem that lands on you stops one cell up, you see the
+         * full death anim, THEN it drops the last 16px. */
+        u8 frozen = (u8)(game.death_pending && !game.death_dropping);
         for (i = 0; i < fall_anim_n; i++) {
             FallAnim *a = &fall_anim[i];
             if (!a->active) continue;
-            a->py = (s16)(a->py + FALL_DY);
+            if (!frozen) a->py = (s16)(a->py + FALL_DY);
             if (a->py >= a->py_end) {                  /* landed */
                 a->py = a->py_end;
                 a->active = 0;
@@ -801,11 +821,18 @@ void game_update(void) {
             s16 ppx = game.player.pixel_x, ppy = game.player.pixel_y;
             for (i = 0; i < fall_anim_n; i++) {
                 FallAnim *a = &fall_anim[i];
-                s16 fx, fy;
+                s16 fx;
                 if (!a->active || a->type == TILE_EXTRA_LIFE) continue;
                 fx = (s16)((s16)(a->col * TILE_SIZE) - ppx); if (fx < 0) fx = (s16)(-fx);
-                fy = (s16)(a->py - ppy);                     if (fy < 0) fy = (s16)(-fy);
-                if (fx < TILE_SIZE && fy < TILE_SIZE) { player_die(); break; }
+                /* it has reached the cell directly above the player -> stop it there
+                 * and start the death; the held tile drops the last 16px after the
+                 * anim (see death_dropping below). */
+                if (fx < TILE_SIZE && a->py >= (s16)(ppy - TILE_SIZE)) {
+                    a->py = (s16)(ppy - TILE_SIZE);
+                    game.death_by_fall = 1;
+                    player_die();
+                    break;
+                }
             }
         }
         /* Enemies are crushed the same per-frame way (pixel overlap as the tile
@@ -1010,9 +1037,16 @@ void game_update(void) {
         game.death_timer = DEATH_SEQ_FRAMES;   /* anim + 100ms tail before respawn */
     }
     if (game.death_pending) {
-        if (game.death_timer) game.death_timer--;
-        if (game.death_timer == 0) {
+        if (game.death_timer) {
+            game.death_timer--;                   /* playing the death animation */
+        } else if (game.death_by_fall && !game.death_dropping && game.gravity_resolving) {
+            game.death_dropping = 1;              /* anim done -> release the held tile to drop */
+        } else if (game.death_dropping && game.gravity_resolving) {
+            /* wait: the gravity loop is dropping the tile its final 16px onto the spot */
+        } else {
             game.death_pending = 0;
+            game.death_by_fall = 0;
+            game.death_dropping = 0;
             finalize_falls();                     /* clear any falling-tile OBJ */
             if (game.lives > 1) {                 /* still have lives -> respawn */
                 u8 sx, sy, sr, sc, k;

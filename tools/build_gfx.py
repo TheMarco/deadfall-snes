@@ -496,6 +496,20 @@ def build_obj(sheet_rgba, base, colors=16, do_boost=False):
     return build_one(idx, base, gs=8, colors=colors)
 
 
+def build_block():
+    """Standalone OBJ sheet for the attract mode's destructible 'rock' -- the
+    mineable BLOCK (boulders are indestructible, so the boulder sprite can't be
+    shown being crushed). 3 damage frames (intact / cracked / more cracked) with
+    its OWN 16-colour palette, so it never disturbs the gameplay falls-sheet
+    palette. Level-1 accent colouring (attract always shows level 1's sprites)."""
+    block = colorize_obj(load("block.png"), ACCENT_HUES[0] + BLOCK_HUE_OFFSET, **BLOCK_PARAMS)
+    sheet = Image.new("RGBA", (48, 16), (0, 0, 0, 0))
+    sheet.paste(frame(block, 0, 0), (0, 0))    # damage 0 (intact)
+    sheet.paste(frame(block, 1, 0), (16, 0))   # damage 1 (cracked)
+    sheet.paste(frame(block, 2, 0), (32, 0))   # damage 2 (more cracked)
+    build_obj(sheet, "spr_block", do_boost=True)
+
+
 def main():
     print(">> BG1 gameplay tilesets, per level (gem-N + tinted block + boulder frame N-1)")
     for lvl in range(1, 11):
@@ -537,6 +551,9 @@ def main():
         falls.paste(frame(iron, lvl - 1, 0), (48, 0))         # boulder: own natural frame (untinted)
         falls.paste(frame(elife, 0, 0), (64, 0))
         build_obj(falls, "spr_falls_%d" % lvl, do_boost=True)
+
+    print(">> attract-mode rock (mineable block, own palette)")
+    build_block()
 
     print("done.")
     return 0

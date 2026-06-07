@@ -278,6 +278,15 @@ spr_edeath_picend:
 spr_edeath_pal:  .incbin "res/spr_edeath.pal"
 .ends
 
+; ---- Attract-mode 'rock' = the mineable block (3 damage frames, OWN palette so
+; it never disturbs the gameplay falls-sheet colours). Loaded into the idle
+; player-death OBJ slot during attract only. ----
+.section ".rodata_block" superfree
+spr_block_pic:  .incbin "res/spr_block.pic"
+spr_block_picend:
+spr_block_pal:  .incbin "res/spr_block.pal"
+.ends
+
 ; ---- Falling-tile OBJ per level (level-coloured gem + boulder + extra-life, 16x16) ----
 .section ".rodata_falls" superfree
 spr_falls_1_pic:  .incbin "res/spr_falls_1.pic"

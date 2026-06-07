@@ -11,6 +11,12 @@ s16 ai_wrapped_diff(s16 target, s16 current, s16 max);  /* shortest torus delta 
  * (with section wrap) must be empty. */
 u8 ai_can_move(u8 srow, u8 scol, u8 x, u8 y, s8 dx, s8 dy);
 
+/* Entity-vs-entity blocking: enemies and the robot are solid to EACH OTHER (but
+ * enemies still pass through each other, per the JS AI). Used to skip a candidate
+ * step that would overlap the other actor's cell (or the cell it is sliding into). */
+u8 ai_robot_at_step(u8 srow, u8 scol, u8 x, u8 y, s8 dx, s8 dy);  /* robot blocks an enemy */
+u8 ai_enemy_at_step(u8 srow, u8 scol, u8 x, u8 y, s8 dx, s8 dy);  /* an enemy blocks the robot */
+
 /* Distance field flooded from (tx,ty) over a section's empty tiles, computed
  * incrementally so no single frame spikes: begin() seeds it, work() expands up
  * to `budget` cells per call (call every frame). All enemies in that section

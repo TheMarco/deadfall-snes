@@ -93,8 +93,8 @@ void audio_music_frantic(void) {
     spcPlay(MUSIC_FRANTIC_START);
     spcSetModuleVolume(MUSIC_VOLUME);   /* spcPlay resets module volume; re-duck */
 }
-/* Victory/credits reuses the triumphant "Golden Anthem" (level 10's calm theme). */
-void audio_music_credits(void)  { audio_play_music(MOD_MUSIC_LEVEL10, MUSIC_CALM_START); }
+/* Victory/credits reuses the title theme (standalone module, loops over the credits). */
+void audio_music_credits(void)  { audio_play_music(MOD_MUSIC_INTRO, 0); }
 /* Title-screen theme: standalone module, loops. */
 void audio_music_intro(void)    { audio_play_music(MOD_MUSIC_INTRO, 0); }
 /* Game over: standalone module, played once from the top, then silence. */

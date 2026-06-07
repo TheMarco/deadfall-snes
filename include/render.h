@@ -52,6 +52,10 @@
 #define OBJPAL_PDEATH 5
 #define OBJPAL_EDEATH 6
 #define OBJPAL_FALLS  7
+/* Attract mode loads the 'rock' (mineable block) sheet over the idle player-death
+ * OBJ slot + palette. dmg0 at OBJN_BLOCK_ATTRACT; +2 per damage frame (dmg1,dmg2). */
+#define OBJN_BLOCK_ATTRACT   OBJN_PDEATH
+#define OBJPAL_BLOCK_ATTRACT OBJPAL_PDEATH
 
 /* OAM slot ids (each entry is 4 bytes). */
 #define OAM_PLAYER     0
@@ -127,5 +131,8 @@ void render_clear_screen(void);            /* clear the whole BG1 tilemap (text 
 void render_text(u8 x, u8 y, const char *s); /* HUD-font text anywhere on BG1           */
 void render_num(u8 x, u8 y, u32 val, u8 digits); /* HUD-font fixed-width number          */
 void render_hide_sprites(void);            /* hide all entity OBJ slots                 */
+void render_load_sprites(void);            /* (re)load all entity OBJ tiles+palettes into VRAM */
+void render_attract_begin(void);           /* black canvas (BG3+OBJ) for attract mode; reloads
+                                            * the font + sprites the Mode-3 title clobbered    */
 
 #endif /* RENDER_H */

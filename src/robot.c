@@ -76,6 +76,7 @@ static void robot_move_towards(Robot *r) {
         u16 d, score;
         u8 rev;
         if (!ai_can_move(r->section_row, r->section_col, r->x, r->y, dx, dy)) continue;
+        if (ai_enemy_at_step(r->section_row, r->section_col, r->x, r->y, dx, dy)) continue;  /* don't walk through Gloop */
         nx = (s8)(r->x + dx); ny = (s8)(r->y + dy);
         if (!allow_cross && (nx < 0 || nx >= GRID_COLS || ny < 0 || ny >= GRID_ROWS))
             continue;

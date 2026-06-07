@@ -70,6 +70,7 @@ static void enemy_move_towards_player(Enemy *e, Enemy *all, u8 count) {
         u16 d, score;
         u8 rev;
         if (!ai_can_move(e->section_row, e->section_col, e->x, e->y, dx, dy)) continue;
+        if (ai_robot_at_step(e->section_row, e->section_col, e->x, e->y, dx, dy)) continue;  /* Clanky is solid */
         nx = (s8)(e->x + dx); ny = (s8)(e->y + dy);
         if (!allow_cross && (nx < 0 || nx >= GRID_COLS || ny < 0 || ny >= GRID_ROWS))
             continue;     /* keep a same-section enemy inside the player's section */
