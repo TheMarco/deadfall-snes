@@ -329,7 +329,7 @@ void render_build_map(void) {
     sc_grid = &game.sections[idx][0][0];
     sc_dmg  = &game.damage[idx][0][0];
     sc_last_r = game.cur_row; sc_last_c = game.cur_col;
-    for (i = (PLAYFIELD_OFFSET_Y >> 3) * 32; i < 32 * 32; i++) bg1map[i] = 0; /* clear playfield rows (keep HUD/margin) */
+    for (i = 0; i < 32 * 32; i++) bg1map[i] = 0;   /* clear the WHOLE map incl. the top HUD/margin rows: BG1 there must be empty (the HUD lives on BG3), else the transparent top-right minimap corner -- and any section slide -- reveals stale tiles */
     for (gy = 0; gy < GRID_ROWS; gy++)
         for (gx = 0; gx < GRID_COLS; gx++)
             render_set_cell(gx, gy);
@@ -417,7 +417,10 @@ static void render_build_section_to(u16 *buf, u8 sr, u8 sc) {
     u8 base = (u8)(PLAYFIELD_OFFSET_Y >> 3);
     u8 gx, gy;
     u16 i;
-    for (i = base * 32; i < 32 * 32; i++) buf[i] = 0;
+    /* clear the WHOLE buffer incl. the top HUD/margin rows: the slide DMAs all 32
+     * rows into screen1, so leaving the top rows uninitialised showed boot/WRAM
+     * garbage through the transparent top-right minimap corner during the slide. */
+    for (i = 0; i < 32 * 32; i++) buf[i] = 0;
     for (gy = 0; gy < GRID_ROWS; gy++)
         for (gx = 0; gx < GRID_COLS; gx++) {
             u8 t  = sec[gy][gx];
@@ -809,6 +812,12 @@ void render_load_gameplay_tiles(u8 level) {
      * on every level load -- they're title-only collateral, cheap to restore. */
     dmaCopyVram((u8 *)&spr_zap_h_pic, VRAM_OBJ_ZAPH, (u16)(&spr_zap_h_picend - &spr_zap_h_pic));
     dmaCopyVram((u8 *)&spr_zap_v_pic, VRAM_OBJ_ZAPV, (u16)(&spr_zap_v_picend - &spr_zap_v_pic));
+    /* spr_pdeath (player-death anim, OBJ 0x7600) sits in the same title-clobbered range
+     * AND is the exact slot attract mode reuses for its 'rock' (render_attract_begin).
+     * Neither the title nor attract restores it, so a death right after either showed
+     * the leftover rock instead of the death animation. Reload its tiles + palette too. */
+    dmaCopyVram((u8 *)&spr_pdeath_pic, VRAM_OBJ_PDEATH, (u16)(&spr_pdeath_picend - &spr_pdeath_pic));
+    setPalette((u8 *)&spr_pdeath_pal, 128 + OBJPAL_PDEATH * 16, 16 * 2);
 }
 
 /* Fill the WHOLE BG2 map with the seamless texture tiled. Must cover all 32
