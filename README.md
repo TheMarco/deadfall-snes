@@ -13,13 +13,14 @@ It runs on emulators (tested in OpenEmu) and real hardware.
 **This SNES version is fully free and open source.** You can also build it yourself
 with the instructions below.
 
-## Status (work in progress)
+## Status
 
-Playable already: tile-locked movement, push (with the original's hold-to-push delay),
-mining, animated gravity with smooth falling tiles and crush, BFS enemies, the zapping
-robot, 4-direction section transitions with a parallax scrolling background, HUD, BRR
-sound effects, and chiptune music converted from MIDI. Remaining: full scene/UI polish,
-all 10 levels tuned, and a final fidelity pass.
+**Complete and in beta.** The full game is playable end to end across all 10 levels:
+tile-locked movement, push (with the original's hold-to-push delay), mining, animated
+gravity with smooth falling tiles and crush, BFS enemies, the zapping robot, 4-direction
+section transitions over a parallax scrolling background, an SMAS-style iris wipe between
+levels, HUD with a live minimap, title screen, attract mode, death cinematic, BRR sound
+effects, and a full chiptune soundtrack.
 
 ## Build
 
@@ -38,7 +39,7 @@ flash it to a cartridge.
 The generated SNES assets (`res/*.pic` / `.pal` / `.map` / `.it`, and `src/levels.c`)
 are committed, so the ROM builds without re-running the asset pipeline. Regenerating
 assets from the original art additionally requires the source game and the Python tools
-in `tools/` (`build_gfx.py`, `make_bg.py`, `mid2it.py`, `convert_levels.py`).
+in `tools/` (`build_gfx.py`, `make_bg.py`, `build_songs.py`, `convert_levels.py`).
 
 ## Project layout
 
