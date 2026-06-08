@@ -786,7 +786,7 @@ void game_update(void) {
         if (game.lc_timer == 0) {
             game.is_level_complete = 0;
             if (game.current_level >= MAX_LEVELS) game.is_victory = 1;
-            else load_level((u8)(game.current_level + 1), 1);   /* close old level, open new */
+            else load_level((u8)(game.current_level + 1), 0);   /* leave the level-complete (kitty) screen with a plain cut -- no iris close; the new level still irises in */
         }
         return;                                  /* everything paused behind the banner */
     }
