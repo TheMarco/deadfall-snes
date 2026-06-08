@@ -7,9 +7,11 @@ This is a faithful, from-scratch reimplementation of the full game as a real SNE
 cartridge image (`deadfall.sfc`) in C using [PVSnesLib](https://github.com/alekmaul/pvsneslib).
 It runs on emulators (tested in OpenEmu) and real hardware.
 
-**This SNES version is fully free and open source.** Once it's finished I'll also
-include the compiled ROM image here so you can just download and play. Until then,
-you can build it yourself with the instructions below.
+**▶ Play it in your browser, download the ROM, and read the full write-up:**
+**[ai-created.com/stories/deadfall-snes-port](https://www.ai-created.com/stories/deadfall-snes-port)**
+
+**This SNES version is fully free and open source.** You can also build it yourself
+with the instructions below.
 
 ## Status (work in progress)
 
