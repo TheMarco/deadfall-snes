@@ -154,13 +154,19 @@ typedef struct {
 
     /* progress */
     u32 score;
+    u32 level_start_score;       /* score when the current level began: the SRAM
+                                  * suspend point saves THIS (mid-level gems respawn
+                                  * with the level, so saving the live score would
+                                  * let them be collected twice)                  */
     u8  lives;
     u8  continues;
     u16 total_gems;
     u16 gems_collected;
 
     /* per-level stats + time bonus (shown on the level-complete banner) */
-    u16 level_start_frame;       /* game.frame when the level began            */
+    u32 level_start_frame;       /* game.frame32 when the level began (u32: the u16
+                                  * frame counter wraps at ~18 min, which reset the
+                                  * par clock and re-awarded the full time bonus)   */
     u32 level_par_ms;            /* computed par time in ms (calculateParTime)  */
     u16 blocks_crushed;          /* blocks destroyed this level                 */
     u16 enemies_killed;          /* enemies the player killed this level        */
@@ -181,6 +187,8 @@ typedef struct {
 
     /* death / portal / spawn animation */
     u8 death_pending, death_frame, death_timer;
+    u16 death_watchdog;         /* frames since the death sequence began; force-completes
+                                 * the respawn if the flag chain below ever wedges       */
     u8 death_by_fall;           /* the kill was a falling tile: freeze it above the player
                                  * during the death anim, then drop it the last 16px         */
     u8 death_dropping;          /* post-anim phase: the held tile is dropping onto the spot   */
@@ -219,6 +227,8 @@ typedef struct {
 
     /* misc timers */
     u16 frame;
+    u32 frame32;                /* u32 mirror of `frame` for elapsed-time math that must
+                                 * survive the u16 wrap (time bonus); both tick together */
     u8  alarm_timer, alarm_on;
 } GameState;
 

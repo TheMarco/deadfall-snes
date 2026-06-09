@@ -55,7 +55,10 @@ CFLAGS += -I$(CURDIR)/include
 all:
 	@PATH="$(CURDIR)/tools/bin:$$PATH" $(MAKE) --no-print-directory rom
 
+# Post-link: this WLA-DX ignores hdr.asm's FASTROM directive when emitting the
+# mode byte, so patch the speed bit ($7FD5 -> $30) + fix the checksum ourselves.
 rom: $(ROMNAME).sfc
+	@python3 tools/set_fastrom.py $(ROMNAME).sfc
 
 # Build, then deploy into OpenEmu's library and open OpenEmu.
 run: all

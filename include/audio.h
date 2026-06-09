@@ -17,6 +17,8 @@ void audio_music_intro(void);      /* title-screen theme (loops)            */
 void audio_music_levelfinished(void); /* level-complete jingle (plays once) */
 void audio_music_gameover(void);   /* game-over theme                       */
 void audio_music_fadeout(u8 frames); /* BLOCKING: ramp music to silence + stop */
+void audio_music_pause(void);      /* mute the module (track keeps its position) */
+void audio_music_resume(void);     /* restore the module volume after a pause     */
 void audio_stop(void);             /* stop music (effects stay playable)    */
 
 #endif /* AUDIO_H */

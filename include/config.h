@@ -70,6 +70,7 @@
 #define DEATH_ANIM_FRAMES   7    /* 120ms per death frame (5 frames)     */
 #define DEATH_ANIM_COUNT    5
 #define DEATH_SEQ_FRAMES    (DEATH_ANIM_FRAMES * DEATH_ANIM_COUNT + 6) /* +100ms tail before respawn */
+#define DEATH_WATCHDOG_FRAMES 600 /* 10s: force the respawn if the death sequence wedges */
 #define CRUSH_ANIM_FRAMES   12   /* 200ms per shatter stage (matches JS)  */
 #define CRUSH_ANIM_STAGES   2    /* shatter frames 3,4 -> then gravity     */
 #define LC_BANNER_FRAMES    300  /* 5s level-complete stats banner (JS delayedCall 5000) */
@@ -110,6 +111,15 @@
 #define PAD_SELECT  0x2000
 #define PAD_Y       0x4000
 #define PAD_B       0x8000
+
+/* Buttons live in bits 15-4 of the auto-joypad word; bits 3-0 are the
+ * controller's device-signature nibble -- 0000 on a standard pad, but NON-ZERO
+ * on many clone/wireless pads on real hardware (emulators always report 0000).
+ * Every padsCurrent() read must be masked with this, or "any input held?"
+ * tests stay permanently true on such controllers -- which is exactly what
+ * kept the title's idle counter at 0 and the attract mode from ever starting
+ * on real hardware. */
+#define PAD_BUTTONS 0xFFF0
 
 /* Controls: mine = A. (Y is reserved for the debug level-skip below.) */
 #define PAD_MINE    PAD_A

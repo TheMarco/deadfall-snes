@@ -463,6 +463,14 @@ void render_slide_scroll(u16 cam) {
     scroll_dirty = 1;   /* registers written in vblank (render_apply_scroll) -> no tearing */
 }
 
+/* Crush feedback: a brief 1px vertical jiggle of the playfield+backdrop when a
+ * tile shatters. Driven from game.c (render_shake), applied below in vblank on
+ * top of whatever base scroll is current, so it composes with section slides. */
+static u8 shake_timer;
+void render_shake(u8 frames) {
+    shake_timer = frames;
+}
+
 /* Apply the shadowed scroll to the PPU registers. MUST be called in vblank
  * (right after WaitForVBlank) so the scroll never changes mid-frame. */
 void render_apply_scroll(void) {
@@ -470,6 +478,14 @@ void render_apply_scroll(void) {
      * once in render_init didn't stick -- the per-frame vblank path runs after
      * the library's NMI, which leaves BG3's vertical offset back at 0. */
     bgSetScroll(2, 0, HUD_BG3_VOFS);
+    if (shake_timer) {
+        u8 off = (u8)((shake_timer & 2) ? 1 : 0);   /* 2-frame 0/1px alternation */
+        shake_timer--;
+        bgSetScroll(0, scr_bg1x, (u16)(scr_bg1y + off));
+        bgSetScroll(1, scr_bg2x, (u16)(scr_bg2y + off));
+        scroll_dirty = (u8)(shake_timer == 0);      /* re-assert clean scroll after */
+        return;
+    }
     if (!scroll_dirty) return;
     bgSetScroll(0, scr_bg1x, scr_bg1y);
     bgSetScroll(1, scr_bg2x, scr_bg2y);
@@ -855,6 +871,7 @@ void render_load_background(void) {
      * these two writes are what align it, so we do them on every load too.) */
     slide_pending = 0;
     scroll_dirty  = 0;
+    shake_timer   = 0;   /* a crush jiggle must not carry across a level load */
     scr_bg1x = 0; scr_bg1y = 0;
     scr_bg2x = bg2_cur_x; scr_bg2y = bg2_cur_y;
     bgSetMapPtr(0, VRAM_BG1_MAP, SC_32x32);
@@ -1096,6 +1113,7 @@ void render_init(void) {
     setBrightness(0);
     WaitForVBlank();
 
+    shake_timer = 0;        /* WRAM isn't zeroed at boot -> no garbage boot jiggle */
     oamInit();
     /* Gameplay tiles are per-level (gem/boulder/block differ). bgInitTileSet
      * establishes the BG1 gfx ptr + 16-color mode with level 1's tiles for the
@@ -1616,6 +1634,7 @@ void render_lc_banner(void) {
     render_flush_map();
     bg2_cur_x = 0; bg2_cur_y = 0;
     scr_bg1x = 0; scr_bg1y = 0; scr_bg2x = 0; scr_bg2y = 0; scroll_dirty = 0;
+    shake_timer = 0;            /* no leftover crush jiggle on the banner */
     bgSetScroll(0, 0, 0);
     bgSetScroll(1, 0, 0);
     setScreenOn();              /* the banner is not gameplay -> just show it (no wipe); the

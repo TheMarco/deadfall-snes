@@ -21,6 +21,19 @@ make distclean  # also remove converted res/*.pic/.pal/.map
 
 - Requires `PVSNESLIB_HOME`. If it isn't exported, the Makefile reads it from the
   `.pvsneslib_home` marker file (currently `/Users/marcovhv/pvsneslib/pvsneslib`).
+- **FastROM:** the cart is FastROM (LoROM_FastROM crt0 in the linkfile), but this WLA-DX
+  ignores hdr.asm's `FASTROM` directive — the `rom` target post-patches the mode byte
+  ($7FD5 → $30) and recomputes the checksum via `tools/set_fastrom.py`. Don't ship a
+  `.sfc` that skipped that step.
+- **Joypad reads:** ALWAYS mask `padsCurrent()` with `PAD_BUTTONS` (config.h). Bits 3-0
+  are the controller-signature nibble — non-zero on many real controllers (emulators
+  report 0), which is what silently broke the attract-mode idle trigger on hardware.
+- **SRAM save:** hdr.asm declares CARTRIDGETYPE $02 / SRAMSIZE $01 (2 KB battery).
+  `src/sram.c` keeps a 17-byte magic+checksum record: high score + the suspended run
+  (level, level-start score, lives, continues). The run checkpoint is committed on level
+  complete, every death, continue, and game over (with the continue pre-spent) so a
+  power-cycle can never refund lives/continues; it's erased at final game over/victory.
+  SELECT on the title resumes a valid run.
 - **macOS `sed` shim:** PVSnesLib's `snes_rules` uses GNU `sed -i`, which BSD/macOS `sed` rejects.
   The default `all` target puts `tools/bin` (a portable `sed` shim) on PATH and re-invokes make.
   Always build via `make` / `make all`, not `make rom` directly, or the build will fail on macOS.

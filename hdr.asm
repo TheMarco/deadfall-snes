@@ -20,12 +20,15 @@
   NAME "DEADFALL             "  ; exactly 21 bytes
   ;    "123456789012345678901"
 
-  SLOWROM
   LOROM
+  FASTROM                       ; documentation only: this WLA-DX still emits $20, so
+                                ; the Makefile patches $7FD5 -> $30 post-link
+                                ; (tools/set_fastrom.py); matches the LoROM_FastROM
+                                ; crt0 in the linkfile
 
-  CARTRIDGETYPE $00             ; ROM only (set $02 if SRAM added)
+  CARTRIDGETYPE $02             ; ROM + RAM + battery (SRAM save: high score + progress)
   ROMSIZE $0B                   ; 16 Megabits (2 MB)
-  SRAMSIZE $00
+  SRAMSIZE $01                  ; 16 Kilobits (2 KB) battery-backed SRAM
   COUNTRY $01                   ; USA / NTSC
   LICENSEECODE $00
   VERSION $00

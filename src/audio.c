@@ -111,6 +111,12 @@ void audio_music_levelfinished(void) {
 
 void audio_stop(void) { once_timer = 0; spcStop(); }
 
+/* Pause: silence the module without stopping it (so resume picks the track up
+ * exactly where it was, frantic section included). SFX stay at full volume --
+ * the pause/unpause blip plays through. */
+void audio_music_pause(void)  { spcSetModuleVolume(0); }
+void audio_music_resume(void) { spcSetModuleVolume(MUSIC_VOLUME); }
+
 /* Ramp the current module's volume to silence over `frames` frames, then stop it.
  * BLOCKING (pumps the SPC + waits a vblank each frame, like the screen wipe) -- for
  * scene changes, e.g. fading the level theme out before the level-complete jingle

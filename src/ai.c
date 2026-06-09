@@ -6,6 +6,16 @@
 #define IS_OPEN(t) ((t) == TILE_EMPTY)
 
 static u16 rng_state = 0x2D9F;
+
+/* Mix real entropy into the LFSR (the vblank count when the player pressed
+ * START -- human timing). Without this every playthrough keeps the boot
+ * constant and enemies make identical "random" choices game after game. Never
+ * let the state hit 0: a zeroed xorshift is stuck at 0 forever. */
+void ai_rng_seed(u16 s) {
+    rng_state ^= s;
+    if (rng_state == 0) rng_state = 0x2D9F;
+}
+
 u16 ai_rng(void) {
     rng_state ^= (u16)(rng_state << 7);
     rng_state ^= (u16)(rng_state >> 9);

@@ -5,6 +5,7 @@
 #include "types.h"
 
 void game_init(void);     /* start a new game at level 1 */
+void game_resume(void);   /* pick the SRAM-suspended run back up (level/lives/continues) */
 void game_continue(void); /* resume the current level with fresh lives (uses a continue) */
 void game_update(void);   /* one frame: input, logic, gravity, render entities */
 

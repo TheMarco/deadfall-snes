@@ -11,10 +11,12 @@
 #include "render.h"
 #include "audio.h"
 #include "attract.h"
+#include "ai.h"
+#include "sram.h"
 
 GameState game;
 
-enum { SC_LOGO, SC_TITLE, SC_PLAY, SC_GAMEOVER, SC_VICTORY, SC_ATTRACT };
+enum { SC_LOGO, SC_TITLE, SC_PLAY, SC_GAMEOVER, SC_VICTORY, SC_ATTRACT, SC_RESUME };
 
 /* Boot LogoScene physics (port of LogoScene.js): the studio logo drops in under
  * gravity, bounces twice (crush SFX each impact), settles, holds ~3s, fades to the
@@ -44,12 +46,32 @@ static void scene_gameover(void) {
     render_clear_screen();
     render_text(11, 10, "GAME OVER");
     render_text(10, 13, "SCORE");  render_num(16, 13, game.score, 6);
+    render_text(10, 15, "BEST");   render_num(16, 15, save_hiscore, 6);
     if (game.continues > 0) {
-        render_text(7, 17, "START TO CONTINUE");
-        render_text(12, 19, "LEFT:"); render_num(18, 19, game.continues, 1);
+        render_text(7, 18, "START TO CONTINUE");
+        render_text(12, 20, "LEFT:"); render_num(18, 20, game.continues, 1);
     } else {
-        render_text(8, 17, "START FOR TITLE");
+        render_text(8, 18, "START FOR TITLE");
     }
+    game_map_dirty = 1;
+}
+
+/* Resume screen (SELECT on the title while a run is suspended in SRAM): shows
+ * the checkpoint -- level, score, lives, continues -- and offers to pick it up.
+ * Same text-scene plumbing as the game-over screen; the title theme keeps
+ * playing underneath. The run carries its OWN lives/continues, so resuming is
+ * a between-sessions break, never a way around the 3-continue budget. */
+static void scene_resume(void) {
+    render_load_font(1);                     /* transparent font on the black backing */
+    render_hide_sprites();
+    render_clear_screen();
+    render_text(9, 7, "SUSPENDED GAME");
+    render_text(9, 11, "LEVEL");     render_num(17, 11, save_run_level, 2);
+    render_text(9, 13, "SCORE");     render_num(17, 13, save_run_score, 6);
+    render_text(9, 15, "LIVES");     render_num(17, 15, save_run_lives, 1);
+    render_text(9, 17, "CONTINUES"); render_num(19, 17, save_run_continues, 1);
+    render_text(8, 20, "START TO RESUME");
+    render_text(8, 22, "SELECT FOR TITLE");
     game_map_dirty = 1;
 }
 
@@ -100,6 +122,7 @@ int main(void) {
     audio_init();        /* spcBoot - must run before consoleInit enables NMI */
     render_init();       /* boots into render_show_logo (logo on black, above screen) */
     audio_load();        /* soundbank + resident SFX effects */
+    save_load();         /* battery SRAM: high score + suspended run (defaults if blank) */
     game.alarm_active = 0;   /* WRAM isn't zeroed at boot; render_apply_alarm reads this
                               * before game_init runs, so a garbage value tinted the title red */
     game_map_dirty = 0;      /* likewise: don't trigger a stale flush during the LogoScene */
@@ -116,7 +139,8 @@ int main(void) {
          * it) but does not reliably maintain pad_keysdown[], so padsDown() stayed
          * 0 and "PRESS START" never fired (the bug was hidden while OpenEmu kept
          * auto-resuming a save state past the title). */
-        u16 cur  = padsCurrent(0);
+        u16 cur  = (u16)(padsCurrent(0) & PAD_BUTTONS);  /* drop the controller-signature
+                                                          * nibble (see PAD_BUTTONS) */
         u16 down = (u16)(cur & ~pad_prev);
         pad_prev = cur;
 
@@ -152,9 +176,15 @@ int main(void) {
             case SC_TITLE:
                 if (down & PAD_START) {
                     audio_sfx(SFX_MENUSEL);
+                    ai_rng_seed(snes_vblank_count);  /* human START timing = real entropy */
                     audio_music_fadeout(45);   /* fade the title theme out before the level loads */
                     game_init();
                     scene = SC_PLAY;
+                    idle = 0;
+                } else if ((down & PAD_SELECT) && save_run_valid) {
+                    audio_sfx(SFX_MENUSEL);    /* SELECT -> resume the suspended run */
+                    scene = SC_RESUME;
+                    scene_resume();
                     idle = 0;
                 } else if (cur) {
                     idle = 0;                  /* any input resets the attract countdown */
@@ -165,9 +195,30 @@ int main(void) {
                 }
                 break;
 
+            case SC_RESUME:
+                if (down & PAD_START) {
+                    audio_sfx(SFX_MENUSEL);
+                    ai_rng_seed(snes_vblank_count);
+                    audio_music_fadeout(45);
+                    game_resume();
+                    scene = SC_PLAY;
+                } else if (down & (PAD_SELECT | PAD_B)) {
+                    audio_sfx(SFX_MENUMOVE);   /* back to the title (theme never stopped) */
+                    scene = SC_TITLE; scene_title(0); idle = 0;
+                }
+                break;
+
             case SC_PLAY:
                 game_update();
-                if (game.is_game_over || game.is_victory) game.alarm_active = 0;  /* stop the vignette */
+                if (game.is_game_over || game.is_victory) {
+                    game.alarm_active = 0;            /* stop the vignette */
+                    /* persist the final score (it grew past the last checkpoint);
+                     * game.c already staged the run fields (pre-spent continue on
+                     * game over, run cleared on victory / final game over). */
+                    if (game.score > save_hiscore) save_hiscore = game.score;
+                    if (game.is_victory) save_run_valid = 0;
+                    save_commit();
+                }
                 if (game.is_game_over)   { audio_music_gameover(); scene = SC_GAMEOVER; scene_gameover(); }
                 else if (game.is_victory){ audio_music_credits(); scene = SC_VICTORY;
                                            cr_stage = 0; cr_timer = CREDITS_DWELL; scene_credits(0); }
@@ -195,12 +246,23 @@ int main(void) {
 
             case SC_ATTRACT:
                 /* idle character showcase; any press (or its natural end) -> title.
-                 * Blank first: scene_title's render_clear_screen briefly runs Mode 1
-                 * with BG1 still pointing at the title's leftover 8bpp tiles, which
-                 * would flash as garbage if shown. */
+                 * Fade the attract canvas to black, swap scenes blanked (scene_title's
+                 * render_clear_screen briefly runs Mode 1 with BG1 still pointing at
+                 * the title's leftover 8bpp tiles -- garbage if shown), then fade the
+                 * title back in. Replaces the old hard blank+cut. */
                 if (attract_update(down)) {
+                    u8 b;
+                    for (b = 15; b != 0; b--) {            /* ~0.25s fade to black */
+                        setBrightness((u8)(b - 1));
+                        audio_process(); WaitForVBlank();
+                    }
                     setScreenOff();
                     scene = SC_TITLE; scene_title(0); idle = 0;   /* 0: title theme never stopped */
+                    setBrightness(0);                      /* show_title un-blanks at full */
+                    for (b = 0; b <= 15; b++) {            /* ~0.25s fade the title in */
+                        setBrightness(b);
+                        audio_process(); WaitForVBlank();
+                    }
                 }
                 break;
         }

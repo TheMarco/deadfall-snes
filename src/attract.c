@@ -18,6 +18,7 @@
 #include "audio.h"       /* audio_sfx */
 #include "audio_sfx.h"   /* SFX_* */
 #include "game.h"        /* game_map_dirty */
+#include "sram.h"        /* save_hiscore: shown across the top of the cinematic */
 #include "attract.h"
 
 /* ---- layout / pacing ---- */
@@ -80,6 +81,10 @@ static void name_show(const char *s) {
 void attract_begin(void) {
     render_attract_begin();          /* black canvas; reload font + sprites the title clobbered */
     st = A_FLUX_IN; t = 0; cx = 0; bob = 0; eyei = 0;
+    if (save_hiscore) {              /* the battery-backed best, up top for the whole show */
+        render_text(10, 3, "BEST");
+        render_num(15, 3, save_hiscore, 6);
+    }
     name_show("FLUX");
 }
 

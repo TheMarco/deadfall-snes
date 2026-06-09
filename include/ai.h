@@ -5,6 +5,7 @@
 #include "types.h"
 
 u16 ai_rng(void);                                  /* xorshift jitter for chasing */
+void ai_rng_seed(u16 s);                           /* mix entropy into the RNG (title START) */
 s16 ai_wrapped_diff(s16 target, s16 current, s16 max);  /* shortest torus delta   */
 
 /* Can an actor in section (srow,scol) at (x,y) step (dx,dy)? Destination tile

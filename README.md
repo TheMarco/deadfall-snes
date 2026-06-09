@@ -16,11 +16,23 @@ with the instructions below.
 ## Status
 
 **Complete and in beta.** The full game is playable end to end across all 10 levels:
-tile-locked movement, push (with the original's hold-to-push delay), mining, animated
-gravity with smooth falling tiles and crush, BFS enemies, the zapping robot, 4-direction
-section transitions over a parallax scrolling background, an SMAS-style iris wipe between
-levels, HUD with a live minimap, title screen, attract mode, death cinematic, BRR sound
-effects, and a full chiptune soundtrack.
+tile-locked movement with input buffering, push (with the original's hold-to-push delay),
+mining with crush screen-shake feedback, animated gravity with smooth falling tiles and
+crush, BFS enemies, the zapping robot, 4-direction section transitions over a parallax
+scrolling background, an SMAS-style iris wipe between levels, HUD with a live minimap,
+title screen, attract mode, death cinematic, BRR sound effects, and a full chiptune
+soundtrack.
+
+Quality-of-life features:
+
+- **Pause** — START pauses/resumes during play (music ducks, par clock stops).
+- **Battery save (SRAM)** — the high score persists, and a run in progress is
+  checkpointed at every level start: power off, then press **SELECT on the title** to
+  resume where you left off, with the same lives and continues. The save carries the
+  run's whole continue budget, so resuming is a break, never an extra continue — after
+  the third continue the run is erased and it's back to level 1.
+- **FastROM** (3.58 MHz) cartridge image with a valid header checksum.
+- Enemy RNG is seeded from the frame you press START, so playthroughs differ.
 
 ## Build
 
@@ -54,4 +66,4 @@ in `tools/` (`build_gfx.py`, `make_bg.py`, `build_songs.py`, `convert_levels.py`
 ## License
 
 The Deadfall game and original assets are © their author (me). This SNES port's
-source code is released as free and open source — see `LICENSE` (to be added).
+source code is released as free and open source (MIT) — see `LICENSE`.

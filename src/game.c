@@ -16,10 +16,16 @@
 #include "balance.h"
 #include "gravity.h"
 #include "render.h"
+#include "sram.h"
 
 u8 game_map_dirty;
 
 static u8 trans_hold;   /* slide: hold one aligned frame before committing (vblank scroll lag) */
+
+/* Input buffer: a direction tapped while the current tile-step is still
+ * animating is remembered and fires the frame the step lands, so rapid taps
+ * are never dropped on the move boundary. Cleared on every consume/level load. */
+static s8 buf_dx, buf_dy;
 
 static void check_falls_crush(u8 include_player);   /* fwd; player crush is usually per-frame */
 static void check_section_cleared(void);            /* fwd; flashes "SECTION CLEARED" */
@@ -192,10 +198,11 @@ static u32 compute_par_ms(void) {
 }
 
 /* Time bonus (port of calculateTimeBonus): 5000 at/under par, -50/sec over,
- * floored at 0, rounded to nearest 10. */
+ * floored at 0, rounded to nearest 10. Uses the u32 frame mirror: the u16
+ * counter wraps at ~18 minutes, which reset the par clock mid-level. */
 static u16 compute_time_bonus(void) {
-    u16 ef = (u16)(game.frame - game.level_start_frame);   /* elapsed frames */
-    u32 elapsed_ms = (u32)ef * 1000 / 60;
+    u32 ef = game.frame32 - game.level_start_frame;        /* elapsed frames */
+    u32 elapsed_ms = ef * 1000 / 60;
     u16 bonus;
     if (elapsed_ms <= game.level_par_ms) {
         bonus = 5000;
@@ -253,6 +260,9 @@ static void load_level(u8 n, u8 close_wipe) {
     game.death_pending = 0;
     game.death_by_fall = 0;
     game.death_dropping = 0;
+    game.death_watchdog = 0;
+    game.is_paused = 0;
+    buf_dx = 0; buf_dy = 0;      /* drop any buffered move from the previous level */
     game.transitioning = 0;      /* clear stale section-transition state -- WRAM isn't zeroed
                                   * at boot, so a garbage value here ran the brightness-fade on
                                   * the first level (the pre-existing "game start" flash) */
@@ -280,7 +290,8 @@ static void load_level(u8 n, u8 close_wipe) {
     push_grav_timer = 0;
     game.blocks_crushed = 0;
     game.enemies_killed = 0;
-    game.level_start_frame = game.frame;
+    game.level_start_frame = game.frame32;
+    game.level_start_score = game.score;   /* the SRAM suspend point saves this */
     game.level_par_ms = compute_par_ms();   /* needs sections loaded (done above) */
     render_falls_hide();
     render_minimap_reset();       /* rebuild the minimap for the new level's world */
@@ -305,6 +316,27 @@ void game_init(void) {
     load_level(1, 0);       /* builds the level map; render_init() is done once in main() */
 }
 
+/* Pick the suspended run back up exactly where it was checkpointed (start of
+ * its level, with its remaining lives and continues) -- a between-sessions
+ * break, NOT an extra continue: the run's whole budget travels with it. */
+void game_resume(void) {
+    game.score = save_run_score;
+    game.lives = save_run_lives;
+    game.continues = save_run_continues;
+    game.is_game_over = 0;
+    game.is_victory = 0;
+    load_level(save_run_level, 0);
+}
+
+/* Checkpoint the live run into the save_* mirror (caller commits). */
+static void save_run_checkpoint(void) {
+    save_run_valid = 1;
+    save_run_level = game.current_level;
+    save_run_score = game.level_start_score;
+    save_run_lives = game.lives;
+    save_run_continues = game.continues;
+}
+
 /* Resume the current level with fresh lives (used by the continue option). */
 void game_continue(void) {
     if (game.continues == 0) return;
@@ -313,6 +345,9 @@ void game_continue(void) {
     game.score = 0;             /* a continue wipes the score, like the original */
     game.is_game_over = 0;
     load_level(game.current_level, 0);   /* continue: come from the game-over screen, no close */
+    save_run_checkpoint();      /* persist the spent continue so a power-cycle
+                                 * can never refund it */
+    save_commit();
     game_map_dirty = 1;
 }
 
@@ -390,6 +425,7 @@ static void gem_fall_damage(u8 gx, u8 gy) {
         }
         crush_anim_add(gx, gy, MT_GEM_CRUSH);        /* shatter -> cascades gravity */
         crush_pending = 1;
+        render_shake(6);                             /* landing-shatter feedback */
         check_section_cleared();
     } else {
         render_set_cell(gx, gy);                     /* show the new damage frame */
@@ -543,6 +579,7 @@ static void do_mine(s8 dx, s8 dy) {
     game_map_dirty = 1;
     if (!destroyed) { audio_sfx(SFX_CRUSH); render_set_cell(mx, my); return; }  /* a mining hit */
 
+    render_shake(6);             /* crush feedback: brief 1px screen jiggle */
     base_mt = MT_BLOCK_CRUSH;
     if (tile == TILE_GEM) {
         world_set_tile(mx, my, TILE_EMPTY);
@@ -689,9 +726,42 @@ void game_update(void) {
     s8 dx = 0, dy = 0;
     u8 i;
 
-    cur = padsCurrent(0);   /* pad_keys[] auto-updated each vblank by the lib */
+    cur = (u16)(padsCurrent(0) & PAD_BUTTONS);   /* pad_keys[] auto-updated each vblank by
+                                                  * the lib; mask off the signature nibble */
+
+    /* ---- pause (START toggles). Handled before the frame counters tick so a
+     * paused game accrues no par time; everything below is simply frozen. */
+    {
+        static u8 pause_prev;   /* statics aren't zero-initialised at boot, but a
+                                 * garbage value only eats the 1st-ever edge */
+        u8 snow = (u8)((cur & PAD_START) != 0);
+        if (game.is_paused) {
+            if (snow && !pause_prev) {               /* unpause */
+                game.is_paused = 0;
+                render_flash_clear();
+                game_map_dirty = 1;
+                audio_music_resume();
+                audio_sfx(SFX_MENUSEL);
+            }
+            pause_prev = snow;
+            return;                                  /* world stays frozen */
+        }
+        if (snow && !pause_prev && p->alive && !game.transitioning &&
+            !game.death_pending && !game.is_level_complete) {
+            game.is_paused = 1;
+            if (game.flash_timer) { render_flash_clear(); game.flash_timer = 0; }
+            render_flash("PAUSED");                  /* reuse the banner strip */
+            game_map_dirty = 1;
+            audio_music_pause();
+            audio_sfx(SFX_MENUSEL);
+            pause_prev = snow;
+            return;
+        }
+        pause_prev = snow;
+    }
 
     game.frame++;
+    game.frame32++;             /* u32 mirror for wrap-proof elapsed-time math */
 
 #if DEBUG_LEVEL_SKIP
     /* DEBUG (pre-release): tap Y -> next level (wraps 10->1). Edge-detected so
@@ -831,8 +901,14 @@ void game_update(void) {
                 fx = (s16)((s16)(a->col * TILE_SIZE) - ppx); if (fx < 0) fx = (s16)(-fx);
                 /* it has reached the cell directly above the player -> stop it there
                  * and start the death; the held tile drops the last 16px after the
-                 * anim (see death_dropping below). */
-                if (fx < TILE_SIZE && a->py >= (s16)(ppy - TILE_SIZE)) {
+                 * anim (see death_dropping below). The tile must be INSIDE the
+                 * one-tile window over the player's head (>= ppy-16 AND <= ppy):
+                 * without the upper bound, a tile animating BELOW the player --
+                 * e.g. a pushed block dropping down a shaft the player then walks
+                 * up to -- matched too, got yanked up to ppy-16 (a block
+                 * "re-appearing" above your head) and killed. The window can't be
+                 * jumped over: max closing speed is FALL_DY+2 px/frame < 16. */
+                if (fx < TILE_SIZE && a->py >= (s16)(ppy - TILE_SIZE) && a->py <= ppy) {
                     a->py = (s16)(ppy - TILE_SIZE);
                     game.death_by_fall = 1;
                     player_die();
@@ -890,13 +966,27 @@ void game_update(void) {
     if (!(cur & PAD_MINE))
         crush_completed = 0;               /* mine button released -> re-arm mining */
 
+    /* capture a direction tapped mid-step (released before the step lands): it
+     * fires on the landing frame below instead of being dropped. */
+    if (!p->alive || game.death_pending) {
+        buf_dx = 0; buf_dy = 0;
+    } else if (p->is_moving && (dx || dy) && !(cur & PAD_MINE)) {
+        buf_dx = dx; buf_dy = dy;
+    }
+
     if (p->alive && !p->is_moving && !game.death_pending) {
         /* mine: hold A (PAD_MINE) + a direction. */
         if (cur & PAD_MINE) {
+            buf_dx = 0; buf_dy = 0;        /* mining supersedes a buffered step */
             cancel_push();                 /* mining cancels a pending push */
             if ((dx || dy) && !crush_completed) do_mine(dx, dy);   /* one tile per press */
         } else if (dx || dy) {
+            buf_dx = 0; buf_dy = 0;        /* a held direction wins over the buffer */
             do_move(dx, dy);               /* handles the push-delay internally */
+        } else if (buf_dx || buf_dy) {
+            s8 bx = buf_dx, by = buf_dy;   /* consume the buffered tap exactly once */
+            buf_dx = 0; buf_dy = 0;
+            do_move(bx, by);
         } else {
             cancel_push();                 /* direction released -> cancel */
         }
@@ -1040,8 +1130,17 @@ void game_update(void) {
     if (!p->alive && !game.death_pending) {
         game.death_pending = 1;
         game.death_timer = DEATH_SEQ_FRAMES;   /* anim + 100ms tail before respawn */
+        game.death_watchdog = 0;
     }
     if (game.death_pending) {
+        /* watchdog: the resolution below waits on a conjunction of gravity/drop
+         * flags; if any future change ever leaves that chain wedged, force the
+         * respawn instead of freezing the game forever. */
+        if (++game.death_watchdog >= DEATH_WATCHDOG_FRAMES) {
+            game.death_timer = 0;
+            game.death_by_fall = 0;
+            game.death_dropping = 0;
+        }
         if (game.death_timer) {
             game.death_timer--;                   /* playing the death animation */
         } else if (game.death_by_fall && !game.death_dropping && game.gravity_resolving) {
@@ -1056,6 +1155,10 @@ void game_update(void) {
             if (game.lives > 1) {                 /* still have lives -> respawn */
                 u8 sx, sy, sr, sc, k;
                 game.lives--;
+                save_run_checkpoint();            /* persist the lost life: a power-
+                                                   * cycle resumes with the run's REAL
+                                                   * lives/continues, never fresh ones */
+                save_commit();
                 player_respawn();
                 /* send enemies (and the robot) back to their spawn points, like the
                  * original's respawnPlayer -> enemy.reset() for all enemies. */
@@ -1076,6 +1179,21 @@ void game_update(void) {
             } else {                              /* last life lost -> game over */
                 game.lives = 0;
                 game.is_game_over = 1;
+                /* SRAM: pre-spend the continue the game-over screen offers. If
+                 * the player powers off here instead of pressing START, the
+                 * resume IS that continue (score wiped, one fewer left) -- a
+                 * power-cycle can never beat the 3-continue budget. With no
+                 * continues left the run is erased: back to level 1. */
+                if (game.continues > 0) {
+                    save_run_valid = 1;
+                    save_run_level = game.current_level;
+                    save_run_score = 0;
+                    save_run_lives = START_LIVES;
+                    save_run_continues = (u8)(game.continues - 1);
+                } else {
+                    save_run_valid = 0;
+                }
+                /* (main.c commits, folding in the final high score) */
             }
         }
     }
@@ -1112,6 +1230,20 @@ void game_update(void) {
         p->x == game.portal.x && p->y == game.portal.y) {
         game.time_bonus = compute_time_bonus();
         game.score += game.time_bonus;
+        /* persist: the high score follows the running score, and the suspended
+         * run advances to the next level (so a power-off resumes there with the
+         * SAME lives/continues). Finishing level 10 ends the run instead. */
+        if (game.score > save_hiscore) save_hiscore = game.score;
+        if (game.current_level >= MAX_LEVELS) {
+            save_run_valid = 0;
+        } else {
+            save_run_valid = 1;
+            save_run_level = (u8)(game.current_level + 1);
+            save_run_score = game.score;
+            save_run_lives = game.lives;
+            save_run_continues = game.continues;
+        }
+        save_commit();
         game.alarm_active = 0;          /* stop the alarm vignette for the banner */
         game.is_level_complete = 1;
         game.lc_timer = LC_BANNER_FRAMES;

@@ -102,6 +102,7 @@ void render_build_map(void);        /* full rebuild from the current section (lo
 void render_slide_begin(u8 dir, u8 adj_row, u8 adj_col); /* stage adjacent section, go 64-wide */
 void render_slide_scroll(u16 cam);  /* shadow BG1+BG2 scroll during a slide (applied in vblank) */
 void render_apply_scroll(void);     /* write shadowed scroll to PPU regs; call in vblank */
+void render_shake(u8 frames);       /* brief 1px crush jiggle (applied in render_apply_scroll) */
 void render_apply_alarm(void);      /* pulse the red alarm vignette via color math (vblank) */
 void render_wipe_out(void);         /* SMAS diamond tile-wipe: ripple scene to black, blank   */
 void render_wipe_in(void);          /* SMAS diamond tile-wipe: un-blank, ripple new scene in  */
